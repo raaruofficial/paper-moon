@@ -110,7 +110,7 @@ fun WalletScreen(navController: NavController) {
                             scope.launch {
                                 walletManager.signMessage(
                                     ActivityResultSender(activity),
-                                    "HINDSIGHT sign-in"
+                                    "PAPER MOON sign-in"
                                 )
                             }
                         },

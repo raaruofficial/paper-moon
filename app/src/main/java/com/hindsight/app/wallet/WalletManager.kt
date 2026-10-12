@@ -41,7 +41,7 @@ class WalletManager {
         connectionIdentity = ConnectionIdentity(
             identityUri = Uri.parse("https://hindsight.app"),
             iconUri = Uri.parse("favicon.ico"), // resolves against identityUri
-            identityName = "HINDSIGHT"
+            identityName = "PAPER MOON"
         )
     )
 

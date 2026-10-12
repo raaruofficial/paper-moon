@@ -30,7 +30,7 @@ fun SplashScreen(onDone: () -> Unit) {
         verticalArrangement = Arrangement.Center
     ) {
         Text(
-            text = "HINDSIGHT",
+            text = "PAPER MOON",
             fontSize = 44.sp,
             fontWeight = FontWeight.Black,
             color = MaterialTheme.colorScheme.primary,
@@ -38,7 +38,7 @@ fun SplashScreen(onDone: () -> Unit) {
         )
         Spacer(Modifier.height(12.dp))
         Text(
-            text = "INSERT COIN · 25¢ / PLAY",
+            text = "FIRST RIDE FREE · THEN $3.50 / DAY",
             fontSize = 14.sp,
             letterSpacing = 3.sp,
             color = MaterialTheme.colorScheme.secondary

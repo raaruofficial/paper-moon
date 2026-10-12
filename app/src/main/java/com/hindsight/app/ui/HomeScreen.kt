@@ -38,7 +38,7 @@ fun HomeScreen(navController: NavController) {
         verticalArrangement = Arrangement.Center
     ) {
         Text(
-            text = "HINDSIGHT",
+            text = "PAPER MOON",
             fontSize = 40.sp,
             fontWeight = FontWeight.Black,
             color = MaterialTheme.colorScheme.primary,
@@ -46,7 +46,7 @@ fun HomeScreen(navController: NavController) {
         )
         Spacer(Modifier.height(6.dp))
         Text(
-            text = "crypto time machine · 25¢ / play",
+            text = "crypto time machine · first ride free · then $3.50 / day",
             fontSize = 13.sp,
             letterSpacing = 2.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
