@@ -1,20 +1,22 @@
-# HINDSIGHT — Android app
+# PAPER MOON — Android app
 
-**HINDSIGHT** is a crypto time-travel arcade game for the Solana Seeker phone.
-Hindsight is 20/20: pick one of 35 historical runs (BTC, ETH, DOGE, SHIB, WIF,
-PEPE, TRUMP, BONK, PNUT, and more — plus REKT scenarios like LUNA), get $1,000
-in paper money, and ride the real candles with time compression. 25¢ per play,
-SIMULATED FUNDS — real historical prices, paper money.
+**PAPER MOON** is a crypto time-travel arcade game for the Solana Seeker phone.
+Paper money. Real charts. The moon you missed.
+
+Pick one of 35 historical runs (BTC, ETH, DOGE, SHIB, WIF, PEPE, TRUMP, BONK,
+PNUT, and more — plus REKT scenarios like LUNA), get $1,000 in paper money, and
+ride the real candles with time compression. First ride free, then $3.50/day
+unlimited. SIMULATED FUNDS — real historical prices, paper money.
 
 This repo is the **native Android app** (Kotlin + Jetpack Compose): native
 splash, home, wallet, and settings screens, with the game rendering inside a
 WebView on the game screen — and a `HindsightWallet` JS bridge as the seam
 where the native MWA wallet meets the game.
 
-> Status: native scaffold complete (mirrors the VOIDRUNNER app pattern);
-> MWA 2.0 connect/session/sign scaffolding, JS bridge, CI. The game itself
-> ships as a static export ("Hindsight Seeker" artifact) bundled at
-> `app/src/main/assets/game/index.html` — added after the export lands.
+> Status: CLOCK IN demo milestone. Native scaffold with MWA 2.0
+> connect/session/sign scaffolding, JS bridge, and CI. The game ships as a
+> static export bundled at `app/src/main/assets/game/index.html` (35
+> scenarios, fully offline).
 
 ## Architecture
 
@@ -64,11 +66,7 @@ where `resultJson` is `{ ok: true, data: {...} }` or `{ ok: false, error: "..." 
 ### From `git clone` to APK (no Android Studio needed)
 
 CI builds a debug APK on every push to `main` — download it from the
-workflow's **Artifacts** (`hindsight-debug-apk`).
-
-> The GitHub App cannot write `.github/workflows/*` — add `android.yml`
-> (in this repo at `.github/workflows/android.yml`) manually via the GitHub
-> web UI after creating the repo, same as the VOIDRUNNER setup.
+workflow's **Artifacts** (`paper-moon-debug-apk`).
 
 ### Local build (Android Studio)
 
@@ -92,15 +90,10 @@ Release APKs are signed from GitHub Secrets. Set these in
 | `KEY_PASSWORD` | Key password |
 
 Then tag: `git tag v0.1.0 && git push origin v0.1.0` → signed APK in
-`hindsight-release-apk`.
+`paper-moon-release-apk`.
 
 > Guard the signing keystore like the publisher wallet.
 
-## Repo setup (user steps)
+## Contact
 
-1. Create the public repo `raaruofficial/hindsight` on GitHub (the GitHub App
-   gets 403 on `create_repository` — this step is yours).
-2. Push this directory: `git remote add origin git@github.com:raaruofficial/hindsight.git && git push -u origin main`
-3. Add `.github/workflows/android.yml` via the GitHub web UI (copy from this repo).
-4. Add the four signing secrets above.
-5. Push → CI builds the debug APK → install on Seeker → wallet-connect test.
+X: [@raaruofficial](https://x.com/raaruofficial)
