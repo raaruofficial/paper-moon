@@ -4,7 +4,8 @@
 Paper money. Real charts. The moon you missed.
 
 Pick one of 35 historical runs (BTC, ETH, DOGE, SHIB, WIF, PEPE, TRUMP, BONK,
-PNUT, and more — plus REKT scenarios like LUNA), get $1,000 in paper money, and
+PNUT, and more — plus REKT scenarios like LUNA), get paper money to ride
+with — era funds from $250, growing to $1,000 as you stamp the eras — and
 ride the real candles with time compression. First ride free, then $3.50/day
 unlimited. SIMULATED FUNDS — real historical prices, paper money.
 
