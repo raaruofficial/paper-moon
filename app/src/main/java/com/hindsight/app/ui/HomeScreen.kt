@@ -46,7 +46,7 @@ fun HomeScreen(navController: NavController) {
         )
         Spacer(Modifier.height(6.dp))
         Text(
-            text = "crypto time machine · first ride free · then $3.50 / day",
+            text = "crypto time machine · 3 rookie rides free · then a simulated coin or pass",
             fontSize = 13.sp,
             letterSpacing = 2.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant

@@ -38,7 +38,7 @@ fun SplashScreen(onDone: () -> Unit) {
         )
         Spacer(Modifier.height(12.dp))
         Text(
-            text = "FIRST RIDE FREE · THEN $3.50 / DAY",
+            text = "3 ROOKIE RIDES FREE · THEN A SIMULATED COIN OR PASS",
             fontSize = 14.sp,
             letterSpacing = 3.sp,
             color = MaterialTheme.colorScheme.secondary

@@ -60,7 +60,7 @@ fun SettingsScreen(navController: NavController) {
             Text("About", style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.height(8.dp))
             Text(
-                "PAPER MOON — crypto time-travel arcade for the Solana Seeker.\nFirst ride free, then $3.50/day unlimited. Non-custodial: your keys never leave the Seed Vault.",
+                "PAPER MOON — crypto time-travel arcade for the Solana Seeker.\nThree rookie rides free every session, then a simulated coin insert (25 cents a play) or a simulated $5 session pass — this build charges nothing. Non-custodial: your keys never leave the Seed Vault.",
                 fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
