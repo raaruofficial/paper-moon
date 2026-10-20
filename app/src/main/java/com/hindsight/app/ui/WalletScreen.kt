@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
 import com.hindsight.app.PaperMoonApp
+import com.hindsight.app.wallet.WalletUiException
 import com.hindsight.app.wallet.WalletUiState
 import kotlinx.coroutines.launch
 
@@ -67,8 +68,15 @@ fun WalletScreen(navController: NavController) {
                     snackbarHostState.showSnackbar("Wallet connected.")
                 },
                 onFailure = { e ->
+                    // Snackbar text is a plain constant by failure class:
+                    // WalletManager seals every failure at the Result
+                    // boundary as a WalletUiException whose message is
+                    // user-facing copy (T1-S08) — raw SDK text can never
+                    // reach this call. Anything unexpected falls back to
+                    // the generic failure constant, not e.message.
                     snackbarHostState.showSnackbar(
-                        e.message ?: "Wallet connection failed. Please try again."
+                        (e as? WalletUiException)?.userMessage
+                            ?: "Wallet connection failed. Please try again."
                     )
                 }
             )

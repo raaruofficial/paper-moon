@@ -24,6 +24,17 @@ sealed interface WalletUiState {
 }
 
 /**
+ * A wallet failure whose [message] is plain user-facing copy, safe to
+ * render anywhere — snackbar, screen, or the JS bridge. The raw SDK
+ * cause rides in [cause] for logging only; its text is never the
+ * message, so no consumer of a failed [Result] can leak raw exception
+ * text by reading `e.message` (T1-S08 residue, closed at the Result
+ * boundary).
+ */
+class WalletUiException(val userMessage: String, cause: Throwable? = null) :
+    Exception(userMessage, cause)
+
+/**
  * Owns the Solana Mobile Wallet Adapter session.
  *
  * Uses the official `mobile-wallet-adapter-clientlib-ktx` (MWA 2.0):
@@ -41,7 +52,9 @@ sealed interface WalletUiState {
  *
  * Errors surfaced through [uiState] are always plain user-facing copy
  * written here — raw SDK/exception text never reaches a screen
- * (T1-S08). The underlying cause travels in the returned [Result].
+ * (T1-S08). Failures returned in a [Result] are [WalletUiException]s
+ * whose message is that same plain copy; the raw cause is attached
+ * for logging only.
  */
 class WalletManager(
     private val tokenStore: WalletTokenStore? = null
@@ -133,7 +146,7 @@ class WalletManager(
                 }
             }.getOrElse { e ->
                 restoreConnectedState()
-                return@withContext Result.failure(e)
+                return@withContext Result.failure(WalletUiException(SIGN_FAILED_MESSAGE, e))
             }
             when (result) {
                 is TransactionResult.Success -> {
@@ -141,15 +154,15 @@ class WalletManager(
                         ?.firstOrNull()?.signatures?.firstOrNull()
                     restoreConnectedState()
                     if (sig != null) Result.success(Base58.encode(sig))
-                    else Result.failure(IllegalStateException("Wallet returned an empty signature"))
+                    else Result.failure(WalletUiException("Wallet returned an empty signature"))
                 }
                 is TransactionResult.NoWalletFound -> {
                     restoreConnectedState()
-                    Result.failure(IllegalStateException("No MWA-compatible wallet found on this device"))
+                    Result.failure(WalletUiException("No MWA-compatible wallet found on this device."))
                 }
                 is TransactionResult.Failure -> {
                     restoreConnectedState()
-                    Result.failure(result.e)
+                    Result.failure(WalletUiException(SIGN_FAILED_MESSAGE, result.e))
                 }
             }
         }
@@ -192,7 +205,7 @@ class WalletManager(
 
     private fun fail(message: String, cause: Throwable? = null): Result<String> {
         _uiState.value = WalletUiState.Error(message)
-        return Result.failure(cause ?: IllegalStateException(message))
+        return Result.failure(WalletUiException(message, cause))
     }
 
     private fun restoreConnectedState() {
@@ -202,5 +215,6 @@ class WalletManager(
 
     private companion object {
         const val CONNECT_FAILED_MESSAGE = "Wallet connection failed. Please try again."
+        const val SIGN_FAILED_MESSAGE = "Wallet signing failed. Please try again."
     }
 }
