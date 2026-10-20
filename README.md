@@ -15,7 +15,9 @@ splash, home, wallet, and settings screens, with the game rendering inside a
 WebView on the game screen — and a `PaperMoonWallet` JS bridge as the seam
 where the native MWA wallet meets the game.
 
-> Status: v0.1.1 — the fixed successor to the CLOCK IN build (v0.1.0).
+> Status: v0.1.3 — the fixed successor to the CLOCK IN build (v0.1.0),
+> hardened through the TEKKADAN store cycle (v0.1.1 identity/economy
+> fixes, v0.1.2 cross-audit patch, v0.1.3 stealth-sweep wave).
 > Native scaffold with MWA 2.0 connect/session/sign, JS bridge, and CI.
 > The game ships as a static export bundled at
 > `app/src/main/assets/game/index.html` (35 scenarios, fully offline).
@@ -91,8 +93,10 @@ Release APKs are signed from GitHub Secrets. Set these in
 | `KEY_ALIAS` | Key alias |
 | `KEY_PASSWORD` | Key password |
 
-Then tag: `git tag v0.1.1 && git push origin v0.1.1` → signed APK in
-`paper-moon-release-apk`.
+Then tag the seal commit — one tag per sealed build, cut in the same
+motion as the seal (the tag event is the seal event; no tags on
+intermediate work): `git tag v0.1.3 && git push origin v0.1.3` →
+signed APK in `paper-moon-release-apk`.
 
 > Guard the signing keystore like the publisher wallet.
 
