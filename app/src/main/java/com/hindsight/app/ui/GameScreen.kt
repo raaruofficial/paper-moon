@@ -36,15 +36,15 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.navigation.NavController
-import com.hindsight.app.HindsightApp
+import com.hindsight.app.PaperMoonApp
 import com.hindsight.app.game.GameConfig
-import com.hindsight.app.wallet.HindsightWalletBridge
+import com.hindsight.app.wallet.PaperMoonWalletBridge
 
 /**
  * The game screen. The *game* renders in a WebView, but everything around it
  * is native: navigation, wallet, menus, and lifecycle are all Android.
  *
- * The [HindsightWalletBridge] (JS name `window.HindsightWallet`) is the seam
+ * The [PaperMoonWalletBridge] (JS name `window.PaperMoonWallet`) is the seam
  * where the native Mobile Wallet Adapter session meets the game — connect,
  * sign, and identity flow through it.
  *
@@ -60,7 +60,7 @@ import com.hindsight.app.wallet.HindsightWalletBridge
 fun GameScreen(navController: NavController, onExit: () -> Unit) {
     val context = LocalContext.current
     val activity = context as ComponentActivity
-    val walletManager = remember { (context.applicationContext as HindsightApp).walletManager }
+    val walletManager = remember { (context.applicationContext as PaperMoonApp).walletManager }
     val webView = remember { mutableStateOf<WebView?>(null) }
     var loadError by remember { mutableStateOf(false) }
     var rendererGone by remember { mutableStateOf(false) }
@@ -135,7 +135,7 @@ fun GameScreen(navController: NavController, onExit: () -> Unit) {
                                 return true
                             }
                         }
-                        val bridge = HindsightWalletBridge(
+                        val bridge = PaperMoonWalletBridge(
                             activity = activity,
                             walletManager = walletManager,
                             evaluateJs = { js -> post { evaluateJavascript(js, null) } }

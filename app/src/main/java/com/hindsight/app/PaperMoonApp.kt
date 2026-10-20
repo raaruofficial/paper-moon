@@ -10,7 +10,7 @@ import com.hindsight.app.wallet.WalletTokenStore
  * and configuration changes. It is wired with a [WalletTokenStore] so the
  * MWA auth token persists across process death (T1-S03).
  */
-class HindsightApp : Application() {
+class PaperMoonApp : Application() {
     val walletManager: WalletManager by lazy {
         WalletManager(WalletTokenStore(this))
     }

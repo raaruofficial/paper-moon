@@ -36,7 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
-import com.hindsight.app.HindsightApp
+import com.hindsight.app.PaperMoonApp
 import com.hindsight.app.wallet.WalletUiState
 import kotlinx.coroutines.launch
 
@@ -55,7 +55,7 @@ fun WalletScreen(navController: NavController) {
     val context = LocalContext.current
     val activity = context as ComponentActivity
     val sender = remember { ActivityResultSender(activity) }
-    val walletManager = (context.applicationContext as HindsightApp).walletManager
+    val walletManager = (context.applicationContext as PaperMoonApp).walletManager
     val state by walletManager.uiState.collectAsState()
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }

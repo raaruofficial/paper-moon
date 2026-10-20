@@ -15,7 +15,7 @@ import com.hindsight.app.ui.HomeScreen
 import com.hindsight.app.ui.SettingsScreen
 import com.hindsight.app.ui.SplashScreen
 import com.hindsight.app.ui.WalletScreen
-import com.hindsight.app.ui.theme.HindsightTheme
+import com.hindsight.app.ui.theme.PaperMoonTheme
 
 /**
  * Single-activity app. All navigation is native Compose Navigation —
@@ -27,7 +27,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            HindsightTheme {
+            PaperMoonTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     val navController = rememberNavController()
                     NavHost(navController = navController, startDestination = "splash") {

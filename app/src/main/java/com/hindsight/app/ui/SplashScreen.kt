@@ -15,13 +15,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.delay
 
-/** Splash: brand moment, then hands off to home. No web content here. */
+/**
+ * Splash: the brand moment, then hands off to home.
+ *
+ * T1-S12: there is deliberately NO fixed delay here — the old
+ * unconditional 1.2 s timer gated nothing (no readiness work exists
+ * for it to wait on) and taxed every cold start. The splash dismisses
+ * as soon as it composes; if real loading work ever lands, gate the
+ * handoff on that work, not on a timer.
+ */
 @Composable
 fun SplashScreen(onDone: () -> Unit) {
     LaunchedEffect(Unit) {
-        delay(1200)
         onDone()
     }
     Column(
@@ -38,7 +44,7 @@ fun SplashScreen(onDone: () -> Unit) {
         )
         Spacer(Modifier.height(12.dp))
         Text(
-            text = "3 ROOKIE RIDES FREE · THEN A SIMULATED COIN OR PASS",
+            text = "PAPER MONEY. REAL CHARTS. THE MOON YOU MISSED.",
             fontSize = 14.sp,
             letterSpacing = 3.sp,
             color = MaterialTheme.colorScheme.secondary

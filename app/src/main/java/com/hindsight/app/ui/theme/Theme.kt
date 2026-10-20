@@ -5,7 +5,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-// HINDSIGHT brand palette: deep navy base, hot magenta primary,
+// PAPER MOON brand palette: deep navy base, hot magenta primary,
 // electric cyan secondary, gold tertiary. Hostile red is reserved for danger.
 private val Navy = Color(0xFF070B16)
 private val NavySurface = Color(0xFF0D1424)
@@ -16,7 +16,7 @@ private val Danger = Color(0xFFFF453A)
 private val TextPrimary = Color(0xFFE8EDF7)
 private val TextMuted = Color(0xFF8B94A7)
 
-private val HindsightColors = darkColorScheme(
+private val PaperMoonColors = darkColorScheme(
     primary = Magenta,
     onPrimary = Color.White,
     secondary = Cyan,
@@ -32,6 +32,6 @@ private val HindsightColors = darkColorScheme(
 )
 
 @Composable
-fun HindsightTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = HindsightColors, content = content)
+fun PaperMoonTheme(content: @Composable () -> Unit) {
+    MaterialTheme(colorScheme = PaperMoonColors, content = content)
 }

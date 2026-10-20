@@ -23,13 +23,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.hindsight.app.BuildConfig
-import com.hindsight.app.HindsightApp
+import com.hindsight.app.PaperMoonApp
 import com.hindsight.app.wallet.WalletUiState
 
 /** Native main menu. The arcade cabinet front panel. */
 @Composable
 fun HomeScreen(navController: NavController) {
-    val app = LocalContext.current.applicationContext as HindsightApp
+    val app = LocalContext.current.applicationContext as PaperMoonApp
     val walletState by app.walletManager.uiState.collectAsState()
 
     Column(
@@ -46,8 +46,15 @@ fun HomeScreen(navController: NavController) {
         )
         Spacer(Modifier.height(6.dp))
         Text(
-            text = "crypto time machine · 3 rookie rides free · then a simulated coin or pass",
+            text = "Paper money. Real charts. The moon you missed.",
             fontSize = 13.sp,
+            letterSpacing = 2.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "3 rookie rides free · then a simulated coin or pass",
+            fontSize = 11.sp,
             letterSpacing = 2.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -60,7 +67,10 @@ fun HomeScreen(navController: NavController) {
             is WalletUiState.Connected ->
                 "WALLET · ${s.publicKeyBase58.take(4)}…${s.publicKeyBase58.takeLast(4)}"
             WalletUiState.Working -> "WALLET · …"
-            else -> "WALLET"
+            // T1-S15: an error must be visible from Home, not swallowed
+            // into the same label as a plain disconnected state.
+            is WalletUiState.Error -> "WALLET · ERROR — TAP TO RETRY"
+            WalletUiState.Disconnected -> "WALLET"
         }
         MenuButton(walletLabel, onClick = { navController.navigate("wallet") }, outlined = true)
 

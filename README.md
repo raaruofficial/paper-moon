@@ -12,13 +12,13 @@ play) or a simulated $5 session pass — this build charges nothing. SIMULATED F
 
 This repo is the **native Android app** (Kotlin + Jetpack Compose): native
 splash, home, wallet, and settings screens, with the game rendering inside a
-WebView on the game screen — and a `HindsightWallet` JS bridge as the seam
+WebView on the game screen — and a `PaperMoonWallet` JS bridge as the seam
 where the native MWA wallet meets the game.
 
-> Status: CLOCK IN demo milestone. Native scaffold with MWA 2.0
-> connect/session/sign scaffolding, JS bridge, and CI. The game ships as a
-> static export bundled at `app/src/main/assets/game/index.html` (35
-> scenarios, fully offline).
+> Status: v0.1.1 — the fixed successor to the CLOCK IN build (v0.1.0).
+> Native scaffold with MWA 2.0 connect/session/sign, JS bridge, and CI.
+> The game ships as a static export bundled at
+> `app/src/main/assets/game/index.html` (35 scenarios, fully offline).
 
 ## Architecture
 
@@ -30,8 +30,8 @@ where the native MWA wallet meets the game.
 │  WalletScreen ──► WalletManager ──► MWA 2.0     │  native, no web
 │                      │            (Seed Vault)   │
 │                      ▼                           │
-│  GameScreen: WebView + HindsightWallet bridge   │  game content only
-│     window.HindsightWallet.{                    │
+│  GameScreen: WebView + PaperMoonWallet bridge   │  game content only
+│     window.PaperMoonWallet.{                    │
 │       connectWallet, signMessage,                │
 │       signTransaction, getPublicKey }            │
 └─────────────────────────────────────────────────┘
@@ -44,23 +44,23 @@ where the native MWA wallet meets the game.
   scenario candles, catalysts, newspaper stories, and art ship in the file.
 - **Wallet**: official `com.solanamobile:mobile-wallet-adapter-clientlib-ktx:2.0.8`.
   Connect → association intent → Seed Vault approval → session. The game
-  detects `window.HindsightWallet` and uses it for wallet identity when
+  detects `window.PaperMoonWallet` and uses it for wallet identity when
   present; otherwise it runs standalone with its simulated arcade wallet.
   Signing happens in the wallet; the app only ever sees public keys and
   signatures. All money stays simulated until the production cutover.
 
-### JS bridge contract (`window.HindsightWallet`)
+### JS bridge contract (`window.PaperMoonWallet`)
 
 | Method | Args | Result |
 |---|---|---|
 | `getVersion()` | — | `"1"` (sync) |
 | `isConnected()` | — | `true`/`false` (sync) |
 | `getPublicKey()` | — | Base58 address or `""` (sync) |
-| `connectWallet(requestId)` | request id | ack sync; async → `__hindsightWalletResolve(id, json)` |
+| `connectWallet(requestId)` | request id | ack sync; async → `__paperMoonWalletResolve(id, json)` |
 | `signMessage(requestId, message)` | request id, text | async → `{ ok, data: { signature } }` |
 | `signTransaction(requestId, txBase64)` | request id, tx | **stub** — resolves not_implemented until the payments cutover |
 
-Async results arrive as `window.__hindsightWalletResolve(requestId, resultJson)`
+Async results arrive as `window.__paperMoonWalletResolve(requestId, resultJson)`
 where `resultJson` is `{ ok: true, data: {...} }` or `{ ok: false, error: "..." }`.
 
 ## Build
@@ -91,7 +91,7 @@ Release APKs are signed from GitHub Secrets. Set these in
 | `KEY_ALIAS` | Key alias |
 | `KEY_PASSWORD` | Key password |
 
-Then tag: `git tag v0.1.0 && git push origin v0.1.0` → signed APK in
+Then tag: `git tag v0.1.1 && git push origin v0.1.1` → signed APK in
 `paper-moon-release-apk`.
 
 > Guard the signing keystore like the publisher wallet.

@@ -11,16 +11,16 @@ import org.json.JSONObject
 
 /**
  * The seam between the game (running in the WebView) and the native
- * Solana wallet. Exposed to JavaScript as `window.HindsightWallet`.
+ * Solana wallet. Exposed to JavaScript as `window.PaperMoonWallet`.
  *
- * Calling convention (the game side wires this in later):
+ * Calling convention (the game side wires in at bundle load):
  * ```js
  * // 1. Call a method with a unique requestId:
- * const res = JSON.parse(HindsightWallet.connectWallet("req-123"));
+ * const res = JSON.parse(PaperMoonWallet.connectWallet("req-123"));
  * // res = { accepted: true, requestId: "req-123" }
  *
  * // 2. Wait for the async result:
- * window.__hindsightWalletResolve = (requestId, resultJson) => {
+ * window.__paperMoonWalletResolve = (requestId, resultJson) => {
  *   const result = JSON.parse(resultJson);
  *   // result = { ok: true, data: { publicKey: "..." } }
  *   //     or { ok: false, error: "..." }
@@ -32,7 +32,7 @@ import org.json.JSONObject
  * Nothing here ever touches a private key — signing happens inside the
  * Seeker's Seed Vault wallet through Mobile Wallet Adapter.
  */
-class HindsightWalletBridge(
+class PaperMoonWalletBridge(
     private val activity: ComponentActivity,
     private val walletManager: WalletManager,
     private val evaluateJs: (script: String) -> Unit
@@ -56,7 +56,7 @@ class HindsightWalletBridge(
     fun getPublicKey(): String = walletManager.publicKeyBase58 ?: ""
 
     // ------------------------------------------------------------------
-    // Async operations (ack immediately, resolve via __hindsightWalletResolve)
+    // Async operations (ack immediately, resolve via __paperMoonWalletResolve)
     // ------------------------------------------------------------------
 
     /**
@@ -136,8 +136,8 @@ class HindsightWalletBridge(
     private fun postResolve(requestId: String, resultJson: String) {
         // JSONObject.quote handles escaping; the game parses the string back.
         val script =
-            "window.__hindsightWalletResolve && " +
-                "window.__hindsightWalletResolve(${JSONObject.quote(requestId)}, ${JSONObject.quote(resultJson)});"
+            "window.__paperMoonWalletResolve && " +
+                "window.__paperMoonWalletResolve(${JSONObject.quote(requestId)}, ${JSONObject.quote(resultJson)});"
         evaluateJs(script)
     }
 }
