@@ -32,19 +32,41 @@ sealed interface WalletUiState {
  * - [MobileWalletAdapter.disconnect] to revoke the session
  *
  * API reference: solana-mobile-docs, "Using Mobile Wallet Adapter"
- * (android-native). The auth token is managed in-memory by the MWA client;
- * persist [persistedAuthToken] (e.g. encrypted prefs) to skip the approval
- * dialog on later launches.
+ * (android-native).
+ *
+ * The MWA auth token is persisted through [WalletTokenStore] (token
+ * only, app-private storage): restored before the first connect so an
+ * already-approved wallet can skip the approval dialog, refreshed
+ * after every successful connect, and cleared on disconnect.
+ *
+ * Errors surfaced through [uiState] are always plain user-facing copy
+ * written here — raw SDK/exception text never reaches a screen
+ * (T1-S08). The underlying cause travels in the returned [Result].
  */
-class WalletManager {
+class WalletManager(
+    private val tokenStore: WalletTokenStore? = null
+) {
 
     private val walletAdapter = MobileWalletAdapter(
         connectionIdentity = ConnectionIdentity(
-            identityUri = Uri.parse("https://hindsight.app"),
-            iconUri = Uri.parse("favicon.ico"), // resolves against identityUri
-            identityName = "PAPER MOON"
+            // INTERIM identity (ruled 2026-10-19): until the estate's own
+            // domain stands up, the wallet approval presents the
+            // publisher-controlled project repo. v0.1.0 pointed this at
+            // hindsight.app — a stranger's domain (T1-S04, CATASTROPHIC);
+            // that string must never come back. The icon is an absolute
+            // URL to the launcher artwork hosted in this repo, so it
+            // does not depend on resolving against the identity URI.
+            identityUri = Uri.parse("https://github.com/raaruofficial/paper-moon"),
+            iconUri = Uri.parse("https://raw.githubusercontent.com/raaruofficial/paper-moon/main/docs/app-icon-512.png"),
+            identityName = "Paper Moon"
         )
     )
+
+    init {
+        // Restore a previously issued auth token so the wallet can
+        // re-authorize silently on the next connect.
+        tokenStore?.authToken?.let { walletAdapter.authToken = it }
+    }
 
     private val _uiState = MutableStateFlow<WalletUiState>(WalletUiState.Disconnected)
     val uiState: StateFlow<WalletUiState> = _uiState.asStateFlow()
@@ -71,29 +93,32 @@ class WalletManager {
         withContext(Dispatchers.IO) {
             _uiState.value = WalletUiState.Working
             val result = runCatching { walletAdapter.connect(sender) }.getOrElse { e ->
-                return@withContext fail(e.message ?: "Connection failed", e)
+                return@withContext fail(CONNECT_FAILED_MESSAGE, e)
             }
             when (result) {
                 is TransactionResult.Success -> {
                     val pubkeyBytes = result.authResult.accounts.firstOrNull()?.publicKey
                     if (pubkeyBytes == null) {
-                        fail("Wallet returned no accounts")
+                        fail("The wallet returned no accounts.")
                     } else {
                         val base58 = Base58.encode(pubkeyBytes)
+                        // Persist the token the wallet just issued so the
+                        // next launch can re-authorize without the dialog.
+                        tokenStore?.authToken = walletAdapter.authToken
                         _uiState.value = WalletUiState.Connected(base58)
                         Result.success(base58)
                     }
                 }
                 is TransactionResult.NoWalletFound ->
-                    fail("No MWA-compatible wallet found on this device")
+                    fail("No MWA-compatible wallet found on this device.")
                 is TransactionResult.Failure ->
-                    fail(result.e.message ?: "Wallet connection failed", result.e)
+                    fail(CONNECT_FAILED_MESSAGE, result.e)
             }
         }
 
     /**
-     * Ask the wallet to sign an arbitrary message (used for sign-in and for
-     * the JS bridge's `signMessage`). Returns the Base58 signature.
+     * Ask the wallet to sign an arbitrary message (used by the JS
+     * bridge's `signMessage`). Returns the Base58 signature.
      */
     suspend fun signMessage(sender: ActivityResultSender, message: String): Result<String> =
         withContext(Dispatchers.IO) {
@@ -145,10 +170,24 @@ class WalletManager {
         return Result.failure(UnsupportedOperationException("signAndSendTransactions lands in step 2 (game wiring)"))
     }
 
-    /** Revoke the session; the next connect shows the approval dialog again. */
-    suspend fun disconnect(sender: ActivityResultSender) {
-        runCatching { walletAdapter.disconnect(sender) }
-        _uiState.value = WalletUiState.Disconnected
+    /**
+     * Revoke the session; the next connect shows the approval dialog again.
+     *
+     * T1-S10: the returned Boolean is the truth of the revoke. Only a
+     * successful revoke clears the persisted token and drops the UI to
+     * Disconnected; a failed revoke leaves the current state untouched
+     * (the session is still active, and the UI must keep saying so).
+     */
+    suspend fun disconnect(sender: ActivityResultSender): Boolean {
+        val result = runCatching { walletAdapter.disconnect(sender) }
+        return if (result.isSuccess) {
+            walletAdapter.authToken = null
+            tokenStore?.authToken = null
+            _uiState.value = WalletUiState.Disconnected
+            true
+        } else {
+            false
+        }
     }
 
     private fun fail(message: String, cause: Throwable? = null): Result<String> {
@@ -159,5 +198,9 @@ class WalletManager {
     private fun restoreConnectedState() {
         val pk = publicKeyBase58
         _uiState.value = if (pk != null) WalletUiState.Connected(pk) else WalletUiState.Disconnected
+    }
+
+    private companion object {
+        const val CONNECT_FAILED_MESSAGE = "Wallet connection failed. Please try again."
     }
 }

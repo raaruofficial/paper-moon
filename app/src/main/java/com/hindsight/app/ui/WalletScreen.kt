@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.Button
@@ -18,6 +19,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -38,9 +41,13 @@ import com.hindsight.app.wallet.WalletUiState
 import kotlinx.coroutines.launch
 
 /**
- * Native wallet screen: connect / disconnect / sign, all through
- * Mobile Wallet Adapter against the Seeker's Seed Vault wallet.
- * No web content — this is what makes the app an app, not a wrapper.
+ * Native wallet screen: connect / disconnect through Mobile Wallet
+ * Adapter against the Seeker's Seed Vault wallet. No web content —
+ * this is what makes the app an app, not a wrapper.
+ *
+ * Every outcome produces visible feedback (T1-S02): state changes are
+ * backed by snackbar confirmations for connect and disconnect, in
+ * plain copy — never raw SDK text (T1-S08).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -51,6 +58,22 @@ fun WalletScreen(navController: NavController) {
     val walletManager = (context.applicationContext as HindsightApp).walletManager
     val state by walletManager.uiState.collectAsState()
     val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    fun doConnect() {
+        scope.launch {
+            walletManager.connect(sender).fold(
+                onSuccess = {
+                    snackbarHostState.showSnackbar("Wallet connected.")
+                },
+                onFailure = { e ->
+                    snackbarHostState.showSnackbar(
+                        e.message ?: "Wallet connection failed. Please try again."
+                    )
+                }
+            )
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -62,7 +85,8 @@ fun WalletScreen(navController: NavController) {
                     }
                 }
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { inner ->
         Column(
             modifier = Modifier.fillMaxSize().padding(inner).padding(24.dp),
@@ -74,11 +98,7 @@ fun WalletScreen(navController: NavController) {
                     Text("Not connected", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(16.dp))
                     Button(
-                        onClick = {
-                            scope.launch {
-                                walletManager.connect(sender)
-                            }
-                        },
+                        onClick = { doConnect() },
                         modifier = Modifier.fillMaxWidth(0.8f).height(52.dp)
                     ) { Text("CONNECT WALLET", fontWeight = FontWeight.Bold) }
                     Spacer(Modifier.height(8.dp))
@@ -101,27 +121,25 @@ fun WalletScreen(navController: NavController) {
                         letterSpacing = 3.sp
                     )
                     Spacer(Modifier.height(8.dp))
-                    Text(
-                        s.publicKeyBase58,
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    // T1-S30: the address is selectable so the user can
+                    // copy it out of the app.
+                    SelectionContainer {
+                        Text(
+                            s.publicKeyBase58,
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     Spacer(Modifier.height(24.dp))
                     OutlinedButton(
                         onClick = {
                             scope.launch {
-                                walletManager.signMessage(
-                                    sender,
-                                    "PAPER MOON sign-in"
+                                val revoked = walletManager.disconnect(sender)
+                                snackbarHostState.showSnackbar(
+                                    if (revoked) "Wallet disconnected."
+                                    else "Couldn't disconnect — the wallet session is still active."
                                 )
                             }
-                        },
-                        modifier = Modifier.fillMaxWidth(0.8f).height(52.dp)
-                    ) { Text("SIGN TEST MESSAGE") }
-                    Spacer(Modifier.height(12.dp))
-                    OutlinedButton(
-                        onClick = {
-                            scope.launch { walletManager.disconnect(sender) }
                         },
                         modifier = Modifier.fillMaxWidth(0.8f).height(52.dp)
                     ) { Text("DISCONNECT") }
@@ -132,11 +150,7 @@ fun WalletScreen(navController: NavController) {
                     Text(s.message, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
                     Spacer(Modifier.height(16.dp))
                     Button(
-                        onClick = {
-                            scope.launch {
-                                walletManager.connect(sender)
-                            }
-                        },
+                        onClick = { doConnect() },
                         modifier = Modifier.fillMaxWidth(0.8f).height(52.dp)
                     ) { Text("TRY AGAIN", fontWeight = FontWeight.Bold) }
                 }
