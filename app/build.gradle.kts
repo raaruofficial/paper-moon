@@ -12,8 +12,8 @@ android {
         applicationId = "com.hindsight.app"
         minSdk = 28
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0-hackathon"
+        versionCode = 2
+        versionName = "0.1.1"
 
         vectorDrawables { useSupportLibrary = true }
     }
@@ -67,7 +67,7 @@ android {
     packaging { resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" } }
 
     // lintVitalAnalyzeRelease crashes deterministically in the lint
-    // analyzer on HindsightApp.kt (NegativeArraySizeException — a lint
+    // analyzer on PaperMoonApp.kt (NegativeArraySizeException — a lint
     // bug, reproduced twice on CI 2026-10-19). Vital lint is a release
     // gate, not a build step; disabling release lint checks lets the
     // signed build proceed. Debug lint is unaffected.
@@ -79,7 +79,9 @@ android {
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2026.06.00")
     implementation(composeBom)
-    androidTestImplementation(composeBom)
+    // NOTE (T1-S24): this project has no instrumented or unit tests
+    // (no src/androidTest, no src/test), so there is deliberately no
+    // androidTestImplementation / testImplementation of anything here.
 
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
@@ -97,7 +99,20 @@ dependencies {
     // Solana Mobile Wallet Adapter (official). Provides the native connect /
     // session / sign flow against the Seeker's Seed Vault wallet.
     // Docs: https://github.com/solana-mobile/solana-mobile-docs (android-native)
-    implementation("com.solanamobile:mobile-wallet-adapter-clientlib-ktx:2.0.8")
+    // T1-S24 fix: the clientlib's published Gradle metadata puts
+    // androidx.test.ext:junit-ktx in its RELEASE RUNTIME variant, which
+    // drags androidx.test:core (whose library manifest declares the
+    // exported InstrumentationActivityInvoker activities), androidx.test
+    // monitor/services, and junit:junit (jar resources) into every
+    // consumer's production APK — all three shipped inside v0.1.0's
+    // release APK. The adapter never needs its test libraries at
+    // runtime; exclude the whole test family from this dependency.
+    implementation("com.solanamobile:mobile-wallet-adapter-clientlib-ktx:2.0.8") {
+        exclude(group = "androidx.test")
+        exclude(group = "androidx.test.ext")
+        exclude(group = "androidx.test.services")
+        exclude(group = "junit")
+    }
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
