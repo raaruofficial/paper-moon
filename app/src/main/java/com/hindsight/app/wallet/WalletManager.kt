@@ -7,6 +7,7 @@ import com.solana.mobilewalletadapter.clientlib.MobileWalletAdapter
 import com.solana.mobilewalletadapter.clientlib.TransactionResult
 import com.solana.mobilewalletadapter.clientlib.successPayload
 import com.hindsight.app.util.Base58
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -69,8 +70,13 @@ class WalletManager(
             // that string must never come back. The icon is an absolute
             // URL to the launcher artwork hosted in this repo, so it
             // does not depend on resolving against the identity URI.
+            // The icon URL is pinned to an immutable commit, never a
+            // branch (G-1): a branch-relative URL would let any push
+            // re-face every installed copy's approval screen with no
+            // rebuild or signature in between. RE-PIN AT EVERY SEAL:
+            // point this at the new seal commit's full SHA.
             identityUri = Uri.parse("https://github.com/raaruofficial/paper-moon"),
-            iconUri = Uri.parse("https://raw.githubusercontent.com/raaruofficial/paper-moon/main/docs/app-icon-512.png"),
+            iconUri = Uri.parse("https://raw.githubusercontent.com/raaruofficial/paper-moon/41bb81ab6e506779d072a7aed1742aacae2bd28d/docs/app-icon-512.png"),
             identityName = "Paper Moon"
         )
     )
@@ -83,6 +89,15 @@ class WalletManager(
 
     private val _uiState = MutableStateFlow<WalletUiState>(WalletUiState.Disconnected)
     val uiState: StateFlow<WalletUiState> = _uiState.asStateFlow()
+
+    // HAVOC-4: connects are serialized at the manager. The UI disables
+    // its button while Working, but the JS bridge can invoke connect
+    // at any time; without this guard two connects would race on the
+    // shared MobileWalletAdapter and the last to complete would own
+    // the UI state. A second caller fails fast (never queues, so it
+    // can never wedge or pop a stale approval later), and it does not
+    // touch _uiState — the in-flight connect owns the state.
+    private val connectInFlight = AtomicBoolean(false)
 
     val publicKeyBase58: String?
         get() = (_uiState.value as? WalletUiState.Connected)?.publicKeyBase58
@@ -102,32 +117,40 @@ class WalletManager(
      * (pass `ActivityResultSender(activity)` from the calling Activity).
      * Returns the wallet's Base58 public key on success.
      */
-    suspend fun connect(sender: ActivityResultSender): Result<String> =
-        withContext(Dispatchers.IO) {
-            _uiState.value = WalletUiState.Working
-            val result = runCatching { walletAdapter.connect(sender) }.getOrElse { e ->
-                return@withContext fail(CONNECT_FAILED_MESSAGE, e)
-            }
-            when (result) {
-                is TransactionResult.Success -> {
-                    val pubkeyBytes = result.authResult.accounts.firstOrNull()?.publicKey
-                    if (pubkeyBytes == null) {
-                        fail("The wallet returned no accounts.")
-                    } else {
-                        val base58 = Base58.encode(pubkeyBytes)
-                        // Persist the token the wallet just issued so the
-                        // next launch can re-authorize without the dialog.
-                        tokenStore?.authToken = walletAdapter.authToken
-                        _uiState.value = WalletUiState.Connected(base58)
-                        Result.success(base58)
-                    }
-                }
-                is TransactionResult.NoWalletFound ->
-                    fail("No MWA-compatible wallet found on this device.")
-                is TransactionResult.Failure ->
-                    fail(CONNECT_FAILED_MESSAGE, result.e)
-            }
+    suspend fun connect(sender: ActivityResultSender): Result<String> {
+        if (!connectInFlight.compareAndSet(false, true)) {
+            return Result.failure(WalletUiException(CONNECT_IN_PROGRESS_MESSAGE))
         }
+        return try {
+            withContext(Dispatchers.IO) {
+                _uiState.value = WalletUiState.Working
+                val result = runCatching { walletAdapter.connect(sender) }.getOrElse { e ->
+                    return@withContext fail(CONNECT_FAILED_MESSAGE, e)
+                }
+                when (result) {
+                    is TransactionResult.Success -> {
+                        val pubkeyBytes = result.authResult.accounts.firstOrNull()?.publicKey
+                        if (pubkeyBytes == null) {
+                            fail("The wallet returned no accounts.")
+                        } else {
+                            val base58 = Base58.encode(pubkeyBytes)
+                            // Persist the token the wallet just issued so the
+                            // next launch can re-authorize without the dialog.
+                            tokenStore?.authToken = walletAdapter.authToken
+                            _uiState.value = WalletUiState.Connected(base58)
+                            Result.success(base58)
+                        }
+                    }
+                    is TransactionResult.NoWalletFound ->
+                        fail("No MWA-compatible wallet found on this device.")
+                    is TransactionResult.Failure ->
+                        fail(CONNECT_FAILED_MESSAGE, result.e)
+                }
+            }
+        } finally {
+            connectInFlight.set(false)
+        }
+    }
 
     /**
      * Ask the wallet to sign an arbitrary message (used by the JS
@@ -135,6 +158,14 @@ class WalletManager(
      */
     suspend fun signMessage(sender: ActivityResultSender, message: String): Result<String> =
         withContext(Dispatchers.IO) {
+            // HAVOC-5: capture the session key BEFORE Working overwrites
+            // the state. restoreConnectedState() used to read the key
+            // back out of _uiState — already Working by then — so it
+            // always resolved to null and every sign, successful or
+            // not, landed the UI on Disconnected despite a live
+            // session. Signing must never change the session state:
+            // restore exactly what was here on entry.
+            val priorPublicKey = publicKeyBase58
             _uiState.value = WalletUiState.Working
             val result = runCatching {
                 walletAdapter.transact(sender) { authResult ->
@@ -145,23 +176,23 @@ class WalletManager(
                     )
                 }
             }.getOrElse { e ->
-                restoreConnectedState()
+                restoreConnectedState(priorPublicKey)
                 return@withContext Result.failure(WalletUiException(SIGN_FAILED_MESSAGE, e))
             }
             when (result) {
                 is TransactionResult.Success -> {
                     val sig = result.successPayload?.messages
                         ?.firstOrNull()?.signatures?.firstOrNull()
-                    restoreConnectedState()
+                    restoreConnectedState(priorPublicKey)
                     if (sig != null) Result.success(Base58.encode(sig))
                     else Result.failure(WalletUiException("Wallet returned an empty signature"))
                 }
                 is TransactionResult.NoWalletFound -> {
-                    restoreConnectedState()
+                    restoreConnectedState(priorPublicKey)
                     Result.failure(WalletUiException("No MWA-compatible wallet found on this device."))
                 }
                 is TransactionResult.Failure -> {
-                    restoreConnectedState()
+                    restoreConnectedState(priorPublicKey)
                     Result.failure(WalletUiException(SIGN_FAILED_MESSAGE, result.e))
                 }
             }
@@ -208,13 +239,17 @@ class WalletManager(
         return Result.failure(WalletUiException(message, cause))
     }
 
-    private fun restoreConnectedState() {
-        val pk = publicKeyBase58
-        _uiState.value = if (pk != null) WalletUiState.Connected(pk) else WalletUiState.Disconnected
+    private fun restoreConnectedState(priorPublicKey: String?) {
+        _uiState.value = if (priorPublicKey != null) {
+            WalletUiState.Connected(priorPublicKey)
+        } else {
+            WalletUiState.Disconnected
+        }
     }
 
     private companion object {
         const val CONNECT_FAILED_MESSAGE = "Wallet connection failed. Please try again."
+        const val CONNECT_IN_PROGRESS_MESSAGE = "A wallet connection is already in progress."
         const val SIGN_FAILED_MESSAGE = "Wallet signing failed. Please try again."
     }
 }

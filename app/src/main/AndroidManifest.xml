@@ -7,13 +7,22 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- Backup rules (G-2): the wallet token prefs are excluded from
+         cloud backup and device-to-device transfer on every API level
+         (dataExtractionRules governs API 31+, fullBackupContent the
+         rest); everything else keeps the platform defaults. The MWA
+         auth token is a bearer credential that exists to skip the
+         wallet approval dialog — it must not ride a backup out of the
+         app's own storage choices. -->
     <application
         android:name=".PaperMoonApp"
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
         android:theme="@style/Theme.PaperMoon"
         android:hardwareAccelerated="true"
-        android:supportsRtl="true">
+        android:supportsRtl="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules">
 
         <activity
             android:name=".MainActivity"

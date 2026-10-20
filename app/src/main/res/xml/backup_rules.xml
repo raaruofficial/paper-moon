@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G-2 (legacy, API 30 and below): same exclusion as
+     data_extraction_rules.xml, in the fullBackupContent format —
+     the MWA auth token prefs never leave the device via backup. -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="paper_moon_wallet.xml" />
+</full-backup-content>

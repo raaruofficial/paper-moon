@@ -94,6 +94,17 @@ fun GameScreen(navController: NavController, onExit: () -> Unit) {
         key(incarnation) {
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
+                // HAVOC-8: a WebView leaving composition — the retry
+                // path replacing a renderer-dead instance via the
+                // incarnation bump, or the screen going away — is
+                // destroyed explicitly, not just dropped. The dead
+                // renderer instance otherwise lingers un-destroyed
+                // (the lifecycle observer only ever sees the current
+                // webView reference).
+                onRelease = { wv ->
+                    if (webView.value === wv) webView.value = null
+                    wv.destroy()
+                },
                 factory = { ctx ->
                     WebView(ctx).apply {
                         settings.javaScriptEnabled = true
