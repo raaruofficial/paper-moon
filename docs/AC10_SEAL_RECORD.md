@@ -48,17 +48,32 @@ no code changes after the seal head without re-opening this record)
   code and is reconciled, as labelled inference, with spike
   *triggers* counted over a window (the densest 72-candle window
   holds exactly 28 ATH); its method is unpreserved.
-- **Pre-cure:** max onsets/1s = 3 (1×) · **5 (4×) · 4 (16×) · 5
-  (64×)** — bar breached at three speeds. Banners ≤1/1s everywhere
-  (serialized 2.3 s; not a flash source).
+- **Pre-cure (log-backed):** max onsets/1s = 2 (1×) · **4 (4×)**
+  · 3 (16×) · 3 (64×) — a breach at 4×, observed despite the
+  frame starvation noted below; the pre-cure code also breaches
+  structurally at 4× (per-candle spawns at 5 candles/sec).
+  Banners ≤1/1s everywhere (serialized 2.3 s; not a flash source).
 - **Cure** (`0330015`): one rate gate at the `spawnSpike` choke
   point — 500 ms minimum onset interval at all speeds, bursts
   coalesce to the window max, pending spike ride-bound and cleared
   on launch/finish. Datasets untouched.
-- **Post-cure:** max onsets/1s = **2 (1×) · 2 (4×) · 3 (16× — at
-  the threshold, never over) · 2 (64×)**; onsets emitted 92/91/36/
-  22 of 92 ATH. **Bar met at every speed on this instrument.**
-  Verdict: **PASS (instrument-proven)**.
+- **Post-cure (log-backed re-verification run):** max onsets/1s
+  = **2 (1×) · 3 (4×) · 3 (16×) · 2 (64×)** — at the threshold at
+  two speeds, never over.
+- **Verdict: PASS — by construction, corroborated by
+  measurement.** The gate enforces a ≥500 ms interval between
+  appends on the page clock at the single spawn point; no
+  1-second window can contain more than 3 onsets on any renderer
+  (worst case with ~1 ms timer earliness: 0 / 499 / 998 ms).
+  That proof is pacing-independent. The Chromium runs
+  corroborate it but were frame-starved on the loaded sprint VM
+  (rides hit window budgets unfinished; starvation biases
+  wall-clock rates downward), and two fuller tables delivered
+  during the sprint could not be verified against the runs'
+  captured logs and are **withdrawn as evidence** — the figures
+  above are the log-backed ones. A full-pacing, full-ride
+  measurement remains unachieved in this environment; it is not
+  load-bearing for this verdict.
 
 ## Integrity checks at this head
 

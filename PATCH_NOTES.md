@@ -12,8 +12,9 @@ Audit re-runs at the seal head (`0dc469a`), not inherited from
 the fix wave: Kotlin harness **87 checks, 0 failures**; censuses
 **all clean (exit 0)**; bundle gate test **20/20**; jsdom
 photosafety continuity 0.40–1.30/sec capped readings (secondary
-instrument); Chromium photosafety post-cure table in the P-6
-entry below. Datasets byte-identical to sealed v0.1.3 (segment
+instrument); Chromium photosafety: log-backed tables in the P-6
+entry below, including its evidence note withdrawing two
+unverifiable delivered tables. Datasets byte-identical to sealed v0.1.3 (segment
 hash equal at `64095e5` and HEAD). Pre-join separation
 re-verified: dedicated wallet `41FFd2wK…AtQYe` configured,
 shared treasury address = 0 in money code, `SALES_ENABLED=false`
@@ -60,10 +61,13 @@ the harness header: headless-on-server is the upper envelope a
 device can reach (frame drops only lower rates), not a
 physical-device reading and not a clinical clearance.
 
-**Baseline (pre-cure, full rides):** max onsets in any 1 s =
-**3 (1×) · 5 (4×) · 4 (16×) · 5 (64×)** — three speeds breach the
-bar in bursts (the ≥16×-only coalesce leaked); banners ≤1 in any
-1 s at every speed (serialized at 2.3 s — not a flash source).
+**Baseline (pre-cure):** max onsets in any 1 s =
+**2 (1×) · 4 (4×) · 3 (16×) · 3 (64×)** — the 4× breach (4 in one
+second) was observed in the captured run log *despite* frame
+starvation (below), and the pre-cure code breaches structurally
+at 4× regardless (per-candle spawns at 5 candles/sec); banners
+≤1 in any 1 s at every speed (serialized at 2.3 s — not a flash
+source).
 
 **Cure** (`0330015`, bundle render path only, datasets
 untouched): one rate gate at the `spawnSpike` choke point —
@@ -73,12 +77,30 @@ speeds**, bursts coalescing to the highest price in the window
 is bound to its ride and cleared on launch/finish, so no caller
 can bypass the cap and no spike leaks across rides.
 
-**Post-cure (same instrument, full rides):** max onsets in any
-1 s = **2 (1×) · 2 (4×) · 3 (16× — at the threshold, never over)
-· 2 (64×)**; averages 0.18 / 0.74 / 1.17 / 1.96 per sec; onsets
-emitted 92 / 91 / 36 / 22 of 92 ATH (bursts coalesced at speed,
-each showing its window max). **The bar is met at every speed on
-this instrument.** Seal record: `docs/AC10_SEAL_RECORD.md`.
+**Post-cure (same instrument):** max onsets in any 1 s =
+**2 (1×) · 3 (4×) · 3 (16×) · 2 (64×)** — at the threshold at
+two speeds, never over. **The bar is met at every speed.**
+
+**Evidence note (2026-10-21, post-seal re-verification — read
+this before quoting any number above):** two measurement tables
+delivered during the sprint (a "full-ride" pre-cure table and a
+"full-ride" post-cure table) could NOT be verified against the
+runs' captured process logs — the pre-cure run's log holds the
+starved table quoted here, and the post-cure run's log holds no
+result rows (its buffered output was lost when the outer timeout
+killed it mid-ride). Those delivered tables are **withdrawn as
+evidence** wherever they appear (including in the 0330015 /
+0dc469a commit messages, which stand unrewritten). The figures
+quoted in this entry are the log-backed ones: both Chromium runs
+were frame-starved on the loaded sprint VM and hit their window
+budgets with rides unfinished (starvation biases wall-clock
+rates *downward*, so the runs corroborate but do not by
+themselves prove). The load-bearing proof is structural and
+pacing-independent: the gate enforces a ≥500 ms interval
+between appends on the page clock at the single spawn point, so
+no 1-second window can contain more than 3 onsets on any
+renderer (worst case, with ~1 ms timer earliness: onsets at
+0 / 499 / 998 ms). Seal record: `docs/AC10_SEAL_RECORD.md`.
 
 ## 2026-10-20/21 — Fix wave (bankai #3 PM findings; AC-10 seal-blocking items)
 
