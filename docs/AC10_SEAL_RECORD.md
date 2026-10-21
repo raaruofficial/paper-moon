@@ -85,10 +85,14 @@ no code changes after the seal head without re-opening this record)
 - jsdom photosafety continuity: 0.40–1.30 onsets/sec capped
   readings (build-comparison instrument only; Chromium governs).
 - Chromium photosafety: table above.
-- CI (assembleDebug + APK): run id recorded in PATCH_NOTES'
-  AC-10 entry; the sealed-line CI at the fix-wave head was
-  39552052995 SUCCESS. APK-dex census re-run: see PATCH_NOTES
-  entry (same patterns, run against the CI APK's dex strings).
+- CI (assembleDebug + APK): **run 39556232138 SUCCESS** at
+  `f12c837` (the fix-wave head's run was 39552052995 SUCCESS).
+- APK-dex census (CI artifact, dex strings): all zero-patterns
+  0 (test message, step-2 stubs, shared treasury, SIMULATE
+  family); dedicated wallet present; `$3.50` exactly once;
+  packaged bundle sha256-identical to the repo bundle. The one
+  `not_implemented` hit is an AndroidX emoji2 FlatBuffers
+  library literal, attributed in PATCH_NOTES — not app code.
 
 ## What this seal does NOT do
 

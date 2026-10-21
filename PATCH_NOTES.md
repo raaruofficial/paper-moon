@@ -20,8 +20,16 @@ shared treasury address = 0 in money code, `SALES_ENABLED=false`
 — the sealed line cannot take a purchase. Both-themes check:
 bundle dual-scheme complete; native sheet inherits the shell's
 single fixed dark scheme (no broken light variant exists).
-CI + APK-dex census: recorded in the seal record's verification
-totals on completion of the seal CI run.
+CI: run **39556232138 SUCCESS** at `f12c837` (assembleDebug +
+debug APK artifact). APK-dex census (same patterns over the CI
+APK's dex strings): SIGN TEST MESSAGE 0, "lands in step 2" 0,
+shared treasury address 0, SIMULATE family 0, dedicated receiving
+wallet present (1), `$3.50` exactly 1 (the single source);
+packaged bundle byte-identical to the repo bundle at HEAD
+(sha256 match). Sole `not_implemented` dex hit (1) attributed:
+`androidx.emoji2.text.flatbuffer.FlexBuffers$Reference.toString()`
+— a bundled AndroidX library literal ("not_implemented:"), not
+app code; the source census for app stubs is 0.
 
 ## 2026-10-21 — AC-10 sprint: P-6 photosafety method + cure (decision 19 executed)
 
