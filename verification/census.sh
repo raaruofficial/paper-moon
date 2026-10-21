@@ -26,6 +26,8 @@ count "bundle self-grant pass=true (AC-08: must be 0)" "state.pass=true" "$MAIN/
 count "bundle self-grant credits-- (AC-08: must be 0)" "state.credits--" "$MAIN/assets/game"
 count "bundle SIMULATE purchase family (AC-09: must be 0)" "SIMULATE COIN INSERT\|SIMULATE SESSION PASS\|SIMULATE LIFETIME" "$MAIN/assets/game"
 count "bundle stale prices 25c/$5 pass (AC-09: must be 0)" "25¢ / 1 PLAY\|\$5 / UNLIMITED" "$MAIN/assets/game"
+count "bundle FREE RIDE daily kicker (AC-09: must be 0)" "DAILY EDITION · FREE RIDE" "$MAIN/assets/game"
+count "bundle FREE daily launch label (AC-09: must be 0)" "FREE · DAILY EDITION" "$MAIN/assets/game"
 count "bundle price literal \$3.50 (AC-09: price comes from the bridge getter only)" '\$3\.50' "$MAIN/assets/game"
 count "shared treasury address in money code (pre-join gate: must be 0)" "FRShnxX7vi64gtBoA6JPmH9MBuVqtheEQaxA1D17wKdP" "$MAIN/java/com/hindsight/app/money"
 # Positive checks (must be >= 1)

@@ -191,6 +191,22 @@ const walletOpened = (document) => !document.querySelector('#walletOverlay').cla
     await tick(); await tick();
     check('AC-04/08 coin button routes to shell requestPurchase', calls.purchase === 1);
   }
+  // Case 6 (bankai #3 MAJOR-2 / AC-09): the Daily Edition copy
+  // must not promise a FREE RIDE. The kicker and the launch label
+  // name the rookie-ride mechanic the shell actually grants, and
+  // they render that way even before any claim interaction.
+  {
+    const st = { pubkey: 'FakeWallet6666666666666666666666666666666', bound: true, claimed: true, remaining: 3, passActive: false, railOpen: false };
+    const { document } = await loadPage(st);
+    check('AC-09 daily kicker names the rookie ride, not a free ride',
+      document.querySelector('.daily .kicker').textContent === 'DAILY EDITION · ROOKIE RIDE');
+    document.querySelector('#dailyBtn').click();
+    await tick(); await tick();
+    const launchBtn = document.querySelector('[data-launch]');
+    check('AC-09 daily launch label names the rookie ride',
+      !!launchBtn && launchBtn.textContent.includes('ROOKIE RIDE') &&
+      !launchBtn.textContent.includes('FREE'));
+  }
   console.log(`\n${checks} checks, ${failures} failures`);
   process.exit(failures ? 1 : 0);
 })().catch((e) => { console.error('HARNESS ERROR', e); process.exit(2); });
