@@ -72,6 +72,10 @@ function makeBridge(state) {
     },
     consumeRookieRide: (id) => {
       calls.consume++;
+      if (state.consumeFails) {
+        resolve(bridge._win, id, { ok: false, error: 'consume_failed: the ride could not be recorded' });
+        return '{}';
+      }
       if (state.remaining > 0) state.remaining--;
       resolve(bridge._win, id, { ok: true, data: { rookieRemaining: state.remaining } });
       return '{}';
@@ -158,6 +162,26 @@ const walletOpened = (document) => !document.querySelector('#walletOverlay').cla
     check('AC-08 day-pass ride consumes no rookie ride', calls.consume === 0);
     check('AC-08 pass mirror renders as active pass',
       document.querySelector('#creditLabel').textContent === 'DAY PASS ACTIVE');
+  }
+  // Case 5 (bankai #3 MAJOR-3): the shell REFUSES the consume —
+  // the built ride must roll back: no ride runs, the consume was
+  // attempted exactly once, and the mirror still shows the unspent
+  // ride. (The fire-and-forget original started the loop before the
+  // callback and never read its result.)
+  {
+    const st = { pubkey: 'FakeWallet5555555555555555555555555555555', bound: true, claimed: true, remaining: 1, passActive: false, railOpen: false, consumeFails: true };
+    const { document, calls } = await loadPage(st);
+    check('FIX3 mirror starts at the shell-granted count',
+      document.querySelector('#creditCount').textContent === '1');
+    await launchFirst(document);
+    await tick(); await tick(); await tick();
+    check('FIX3 failed consume starts no ride (rolled back to home)',
+      !rideStarted(document));
+    check('FIX3 rollback is surfaced to the player',
+      document.querySelector('#toast').textContent.includes('could not be recorded'));
+    check('FIX3 consume was attempted exactly once', calls.consume === 1);
+    check('FIX3 mirror still shows the unspent rookie ride',
+      document.querySelector('#creditCount').textContent === '1');
   }
   // Case 4: day-pass purchase routes to the shell by item id only.
   {
