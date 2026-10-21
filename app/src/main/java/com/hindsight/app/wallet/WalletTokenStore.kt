@@ -1,6 +1,7 @@
 package com.hindsight.app.wallet
 
 import android.content.Context
+import com.hindsight.app.money.SecureKeyValueStore
 
 /**
  * On-disk home for the MWA auth token — the token only, nothing else.
@@ -11,27 +12,25 @@ import android.content.Context
  * It is not a key: it cannot sign or move anything by itself, and the
  * wallet can revoke it at any time.
  *
- * Storage is the app's private SharedPreferences (MODE_PRIVATE — no
- * other app can read the file). Deliberately minimal: the alternative,
- * EncryptedSharedPreferences, would add the androidx.security-crypto
- * dependency; that hardening belongs in a change that can be
- * build-verified end to end, not folded blind into this one.
+ * MONEY BUILD (AC-02): storage is now the Keystore-backed
+ * [EncryptedPaperMoonStore] — the v0.1.3 plaintext SharedPreferences
+ * copy is gone (and is wiped on the encrypted store's first init).
+ * The token rides the same encrypted store as entitlements and
+ * receipts, under its own key, and the G-2 backup/transfer
+ * exclusions cover the store's files.
  */
-class WalletTokenStore(context: Context) {
-
-    private val prefs =
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+class WalletTokenStore(
+    private val store: SecureKeyValueStore
+) {
+    constructor(context: Context) : this(EncryptedPaperMoonStore(context))
 
     var authToken: String?
-        get() = prefs.getString(KEY_AUTH_TOKEN, null)
+        get() = store.get(KEY_AUTH_TOKEN)
         set(value) {
-            prefs.edit().apply {
-                if (value == null) remove(KEY_AUTH_TOKEN) else putString(KEY_AUTH_TOKEN, value)
-            }.apply()
+            if (value == null) store.remove(KEY_AUTH_TOKEN) else store.put(KEY_AUTH_TOKEN, value)
         }
 
     private companion object {
-        const val PREFS_NAME = "paper_moon_wallet"
         const val KEY_AUTH_TOKEN = "mwa_auth_token"
     }
 }

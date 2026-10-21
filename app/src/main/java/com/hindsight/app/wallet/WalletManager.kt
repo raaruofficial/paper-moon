@@ -32,8 +32,13 @@ sealed interface WalletUiState {
  * text by reading `e.message` (T1-S08 residue, closed at the Result
  * boundary).
  */
-class WalletUiException(val userMessage: String, cause: Throwable? = null) :
-    Exception(userMessage, cause)
+class WalletUiException(
+    val userMessage: String,
+    cause: Throwable? = null,
+    /** Money build (AC-03): the internal failure kind, for the
+     *  five-class taxonomy mapping. Null for non-transaction errors. */
+    val failureKind: com.hindsight.app.money.TxFailureKind? = null
+) : Exception(userMessage, cause)
 
 /**
  * Owns the Solana Mobile Wallet Adapter session.
@@ -153,10 +158,16 @@ class WalletManager(
     }
 
     /**
-     * Ask the wallet to sign an arbitrary message (used by the JS
-     * bridge's `signMessage`). Returns the Base58 signature.
+     * Ask the wallet to sign a SHELL-BUILT sign-in challenge payload
+     * (AC-01). This is the only message-signing path in the app, and
+     * it is not exposed to the page: the bridge calls it exclusively
+     * with a payload constructed by the Shell Verifier (purpose
+     * prefix + shell nonce + issued-at). No page-supplied text can be
+     * passed here — the bridge method that once forwarded arbitrary
+     * JS strings (`signMessage`) is removed.
+     * Returns the Base58 signature.
      */
-    suspend fun signMessage(sender: ActivityResultSender, message: String): Result<String> =
+    suspend fun signShellChallenge(sender: ActivityResultSender, challengePayload: String): Result<String> =
         withContext(Dispatchers.IO) {
             // HAVOC-5: capture the session key BEFORE Working overwrites
             // the state. restoreConnectedState() used to read the key
@@ -171,7 +182,7 @@ class WalletManager(
                 walletAdapter.transact(sender) { authResult ->
                     val account = authResult.accounts.first().publicKey
                     signMessagesDetached(
-                        arrayOf(message.toByteArray()),
+                        arrayOf(challengePayload.toByteArray()),
                         arrayOf(account)
                     )
                 }
@@ -199,19 +210,87 @@ class WalletManager(
         }
 
     /**
-     * Sign Solana transactions. STUB for step 1: the transaction-building code
-     * (web3-style builders) lands with the game wiring in step 2. The MWA call
-     * itself is `signAndSendTransactions` per the 2.0 spec (`signTransactions`
-     * is deprecated).
+     * Sign and send Solana transactions for real (AC-03): MWA 2.0
+     * `signAndSendTransactions` inside a transact session. The
+     * transactions are built shell-side only (see
+     * [com.hindsight.app.money.TransactionBuilder]); this method
+     * accepts already-built bytes and cannot alter them.
+     *
+     * Every failure is a [WalletUiException] carrying a
+     * [com.hindsight.app.money.TxFailureKind], which the caller maps
+     * onto the five-class taxonomy — raw SDK text never crosses.
      */
     suspend fun signAndSendTransactions(
         sender: ActivityResultSender,
         serializedTransactions: List<ByteArray>
-    ): Result<List<String>> {
-        // TODO(step 2): build real transactions, then:
-        //   walletAdapter.transact(sender) { signAndSendTransactions(serializedTransactions.toTypedArray()) }
-        //   -> result.successPayload?.signatures -> Base58.encode each
-        return Result.failure(UnsupportedOperationException("signAndSendTransactions lands in step 2 (game wiring)"))
+    ): Result<List<String>> = withContext(Dispatchers.IO) {
+        val priorPublicKey = publicKeyBase58
+        _uiState.value = WalletUiState.Working
+        val result = runCatching {
+            walletAdapter.transact(sender) {
+                signAndSendTransactions(serializedTransactions.toTypedArray())
+            }
+        }.getOrElse { e ->
+            restoreConnectedState(priorPublicKey)
+            return@withContext Result.failure(
+                WalletUiException(
+                    SEND_FAILED_MESSAGE, e,
+                    com.hindsight.app.money.TxErrorMapper.kindFor(
+                        noWalletFound = false,
+                        userDeclinedHeuristic = isDeclined(e),
+                        sessionCancelled = isCancelled(e)
+                    )
+                )
+            )
+        }
+        when (result) {
+            is TransactionResult.Success -> {
+                val signatures = result.successPayload?.signatures
+                restoreConnectedState(priorPublicKey)
+                if (signatures != null && signatures.size == serializedTransactions.size) {
+                    Result.success(signatures.map { Base58.encode(it) })
+                } else {
+                    Result.failure(
+                        WalletUiException(
+                            SEND_FAILED_MESSAGE, null,
+                            com.hindsight.app.money.TxFailureKind.OTHER
+                        )
+                    )
+                }
+            }
+            is TransactionResult.NoWalletFound -> {
+                restoreConnectedState(priorPublicKey)
+                Result.failure(
+                    WalletUiException(
+                        "No MWA-compatible wallet found on this device.", null,
+                        com.hindsight.app.money.TxFailureKind.WALLET_NO_WALLET_FOUND
+                    )
+                )
+            }
+            is TransactionResult.Failure -> {
+                restoreConnectedState(priorPublicKey)
+                Result.failure(
+                    WalletUiException(
+                        SEND_FAILED_MESSAGE, result.e,
+                        com.hindsight.app.money.TxErrorMapper.kindFor(
+                            noWalletFound = false,
+                            userDeclinedHeuristic = isDeclined(result.e),
+                            sessionCancelled = isCancelled(result.e)
+                        )
+                    )
+                )
+            }
+        }
+    }
+
+    private fun isDeclined(e: Throwable?): Boolean {
+        val text = e?.toString()?.lowercase() ?: return false
+        return "declin" in text || "reject" in text || "user denied" in text
+    }
+
+    private fun isCancelled(e: Throwable?): Boolean {
+        val text = e?.toString()?.lowercase() ?: return false
+        return "cancel" in text
     }
 
     /**
@@ -251,5 +330,6 @@ class WalletManager(
         const val CONNECT_FAILED_MESSAGE = "Wallet connection failed. Please try again."
         const val CONNECT_IN_PROGRESS_MESSAGE = "A wallet connection is already in progress."
         const val SIGN_FAILED_MESSAGE = "Wallet signing failed. Please try again."
+        const val SEND_FAILED_MESSAGE = "The transaction could not be sent. Please try again."
     }
 }

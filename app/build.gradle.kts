@@ -12,8 +12,8 @@ android {
         applicationId = "com.hindsight.app"
         minSdk = 28
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.1.3"
+        versionCode = 5
+        versionName = "0.2.0"
 
         vectorDrawables { useSupportLibrary = true }
     }
@@ -113,6 +113,10 @@ dependencies {
         exclude(group = "androidx.test.services")
         exclude(group = "junit")
     }
+
+    // AC-02: Keystore-backed EncryptedSharedPreferences for the MWA
+    // auth token, entitlement cache, receipts, and claim ledger.
+    implementation("androidx.security:security-crypto:1.0.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

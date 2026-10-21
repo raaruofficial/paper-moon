@@ -2,12 +2,19 @@
 <!-- G-2 (API 31+): the MWA auth token (SharedPreferences file
      paper_moon_wallet.xml) is excluded from cloud backup AND from
      device-to-device transfer. Everything not listed keeps the
-     platform default (included). -->
+     platform default (included).
+     AC-02 (money build): the encrypted money store
+     (paper_moon_secure.xml) and the EncryptedSharedPreferences
+     keyset file carry the same exclusions. -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="sharedpref" path="paper_moon_wallet.xml" />
+        <exclude domain="sharedpref" path="paper_moon_secure.xml" />
+        <exclude domain="sharedpref" path="__androidx_security_crypto_encrypted_prefs__.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="paper_moon_wallet.xml" />
+        <exclude domain="sharedpref" path="paper_moon_secure.xml" />
+        <exclude domain="sharedpref" path="__androidx_security_crypto_encrypted_prefs__.xml" />
     </device-transfer>
 </data-extraction-rules>

@@ -37,7 +37,7 @@ data class PurchaseSheetData(
 
 /** The sheet seam: the native UI shows the sheet and reports the
  *  user's decision. The harness substitutes a fake. */
-interface SheetConfirmer {
+fun interface SheetConfirmer {
     /** True = user confirmed on the native sheet. */
     fun confirm(sheet: PurchaseSheetData): Boolean
 }

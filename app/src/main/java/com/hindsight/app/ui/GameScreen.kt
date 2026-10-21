@@ -15,11 +15,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
@@ -39,6 +43,8 @@ import androidx.navigation.NavController
 import com.hindsight.app.PaperMoonApp
 import com.hindsight.app.game.GameConfig
 import com.hindsight.app.wallet.PaperMoonWalletBridge
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * The game screen. The *game* renders in a WebView, but everything around it
@@ -61,6 +67,23 @@ fun GameScreen(navController: NavController, onExit: () -> Unit) {
     val context = LocalContext.current
     val activity = context as ComponentActivity
     val walletManager = remember { (context.applicationContext as PaperMoonApp).walletManager }
+    val app = remember { context.applicationContext as PaperMoonApp }
+    // AC-04: the native purchase sheet. The coordinator publishes the
+    // sheet here; the user decides on native UI the game page cannot
+    // touch, with all five fields rendered from shell-side values.
+    val pendingSheet by app.purchaseSheetController.pendingSheet.collectAsState()
+
+    // AC-05/AC-06 (ENT-4): launch reconciliation runs BEFORE the
+    // launch gate reads entitlement — stale intents are marked
+    // UNKNOWN and any pending receipt signature is re-verified
+    // on-chain (restore-by-signature), failing closed.
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            runCatching {
+                app.reconcileCoordinator.reconcileOnLaunch(app.shellVerifier.boundIdentity)
+            }
+        }
+    }
     val webView = remember { mutableStateOf<WebView?>(null) }
     var loadError by remember { mutableStateOf(false) }
     var rendererGone by remember { mutableStateOf(false) }
@@ -154,6 +177,36 @@ fun GameScreen(navController: NavController, onExit: () -> Unit) {
                         addJavascriptInterface(bridge, GameConfig.BRIDGE_NAME)
                         loadUrl(GameConfig.GAME_URL)
                         webView.value = this
+                    }
+                }
+            )
+        }
+
+        pendingSheet?.let { sheet ->
+            AlertDialog(
+                onDismissRequest = { app.purchaseSheetController.decide(false) },
+                title = { Text("CONFIRM PURCHASE") },
+                text = {
+                    Column {
+                        Text(sheet.itemDisplay)
+                        Spacer(Modifier.height(8.dp))
+                        Text("Price: ${sheet.railAmountDisplay} (${sheet.usdAnchorDisplay} · ${sheet.conversionBasis})")
+                        Spacer(Modifier.height(4.dp))
+                        Text("Network fee: ${sheet.networkFeeEstimateDisplay}")
+                        Spacer(Modifier.height(4.dp))
+                        Text("Recipient: ${sheet.recipientDisplay}")
+                        Spacer(Modifier.height(8.dp))
+                        Text("All sales are final. Your pass starts when the payment verifies on-chain.")
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { app.purchaseSheetController.decide(true) }) {
+                        Text("PAY ${sheet.railAmountDisplay}")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { app.purchaseSheetController.decide(false) }) {
+                        Text("CANCEL")
                     }
                 }
             )

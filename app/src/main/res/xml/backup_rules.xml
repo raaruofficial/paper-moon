@@ -1,7 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- G-2 (legacy, API 30 and below): same exclusion as
+<!-- G-2 (legacy, API 30 and below): same exclusions as
      data_extraction_rules.xml, in the fullBackupContent format —
-     the MWA auth token prefs never leave the device via backup. -->
+     the wallet token prefs never leave the device via backup.
+     AC-02 (money build): the encrypted money store
+     (paper_moon_secure.xml) and the EncryptedSharedPreferences
+     keyset file are excluded on the same terms. -->
 <full-backup-content>
     <exclude domain="sharedpref" path="paper_moon_wallet.xml" />
+    <exclude domain="sharedpref" path="paper_moon_secure.xml" />
+    <exclude domain="sharedpref" path="__androidx_security_crypto_encrypted_prefs__.xml" />
 </full-backup-content>

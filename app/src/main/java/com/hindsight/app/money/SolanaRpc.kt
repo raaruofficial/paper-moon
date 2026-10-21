@@ -81,6 +81,40 @@ class SolanaRpcChainReader(
         return runCatching { Base58.decode(base58) }.getOrNull()
     }
 
+    /**
+     * The owner's USDC balance in base units (preflight for the
+     * INSUFFICIENT_FUNDS taxonomy class), or null when unknown —
+     * unknown never blocks a purchase; the wallet itself is the
+     * authority, and settlement verification is the grant gate.
+     */
+    fun usdcBalanceBaseUnits(ownerBase58: String): Long? {
+        val response = post(
+            JSONObject()
+                .put("jsonrpc", "2.0")
+                .put("id", 1)
+                .put("method", "getTokenAccountsByOwner")
+                .put(
+                    "params", JSONArray()
+                        .put(ownerBase58)
+                        .put(JSONObject().put("mint", MoneyConfig.USDC_MINT))
+                        .put(JSONObject().put("encoding", "jsonParsed"))
+                )
+        ) ?: return null
+        val accounts = response.optJSONObject("result")?.optJSONArray("value") ?: return null
+        var total = 0L
+        var seen = false
+        for (i in 0 until accounts.length()) {
+            val info = accounts.optJSONObject(i)
+                ?.optJSONObject("account")?.optJSONObject("data")
+                ?.optJSONObject("parsed")?.optJSONObject("info")
+                ?: continue
+            val amount = info.optJSONObject("tokenAmount")?.optString("amount")?.toLongOrNull() ?: continue
+            total += amount
+            seen = true
+        }
+        return if (seen) total else 0L
+    }
+
     private data class TokenBalance(val mint: String, val amount: Long)
 
     private fun tokenBalances(array: JSONArray?, owner: String): Map<Int, TokenBalance> {
