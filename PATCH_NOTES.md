@@ -1,5 +1,28 @@
 # PATCH_NOTES — money-build-v0.2.0
 
+## 2026-10-21 — AC-10 SEAL (sprint close)
+
+Seal record: `docs/AC10_SEAL_RECORD.md` (per-AC verdicts AC-01…
+AC-09 all PASS; AC-06 Terms adoption flip-gated by design).
+AC-11 staged, NOT applied: `docs/AC11_FLIP_DELTAS.md` (one-line
+`SALES_ENABLED` flip + Terms adoption mechanics + listing leg +
+flip order with single-line revert).
+
+Audit re-runs at the seal head (`0dc469a`), not inherited from
+the fix wave: Kotlin harness **87 checks, 0 failures**; censuses
+**all clean (exit 0)**; bundle gate test **20/20**; jsdom
+photosafety continuity 0.40–1.30/sec capped readings (secondary
+instrument); Chromium photosafety post-cure table in the P-6
+entry below. Datasets byte-identical to sealed v0.1.3 (segment
+hash equal at `64095e5` and HEAD). Pre-join separation
+re-verified: dedicated wallet `41FFd2wK…AtQYe` configured,
+shared treasury address = 0 in money code, `SALES_ENABLED=false`
+— the sealed line cannot take a purchase. Both-themes check:
+bundle dual-scheme complete; native sheet inherits the shell's
+single fixed dark scheme (no broken light variant exists).
+CI + APK-dex census: recorded in the seal record's verification
+totals on completion of the seal CI run.
+
 ## 2026-10-21 — AC-10 sprint: P-6 photosafety method + cure (decision 19 executed)
 
 **Method first.** The bankai record's ~28/sec spike-onset figure
