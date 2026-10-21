@@ -1,0 +1,94 @@
+package com.hindsight.app.money
+
+/**
+ * The single price source for the PAPER MOON money build (AC-09).
+ *
+ * Every surface that names a price — the native purchase sheet, the
+ * bundle's pass label (via the bridge getter), and, when its leg
+ * un-gates, the store listing — renders from this object. No second
+ * literal of the price may exist on any of those surfaces.
+ *
+ * Decided values (P6, owner-ruled):
+ *  - P6-a unit of sale: day pass — 24h unlimited rides, rolling from grant.
+ *  - P6-b price: $3.50 per day pass (USD anchor).
+ *  - P6-c rail: USDC, 1:1 with the USD anchor.
+ *  - P6-d free tier: first ride free survives as the identity-bound
+ *    rookie grant (see [RookieLedger]).
+ *
+ * USDC has 6 decimals, so $3.50 == 3_500_000 base units, exactly.
+ */
+object MoneyConfig {
+    /** The only item identifier the bridge's requestPurchase accepts. */
+    const val ITEM_DAY_PASS: String = "day-pass"
+
+    const val ITEM_DISPLAY_NAME: String = "Day Pass — 24h unlimited rides"
+
+    /** USD anchor, in cents (P6-b). */
+    const val PRICE_USD_CENTS: Long = 350L
+
+    /** Rail amount in USDC base units (6 decimals), 1:1 with the anchor (P6-c). */
+    const val PRICE_USDC_BASE_UNITS: Long = 3_500_000L
+
+    const val RAIL_ASSET: String = "USDC"
+
+    /** The conversion basis shown beside the rail amount (AC-09 item 3). */
+    const val CONVERSION_BASIS: String = "USDC ≈ 1:1 with USD"
+
+    /** Solana mainnet USDC mint (public network constant). */
+    const val USDC_MINT: String = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+
+    /** A day pass runs rolling 24h from grant (AC-06 Terms clock; AC-04 P6-a). */
+    const val PASS_DURATION_MS: Long = 24L * 60L * 60L * 1000L
+
+    /** Rookie grant size (P6-d / AC-07): 3 rookie rides, first ride free. */
+    const val ROOKIE_RIDES: Int = 3
+
+    fun priceUsdDisplay(): String = "$3.50"
+    fun priceRailDisplay(): String = "3.50 USDC"
+}
+
+/**
+ * PRE-JOIN MITIGATION (owner-directed, non-negotiable): the day-pass
+ * rail must FAIL CLOSED until a dedicated PAPER MOON receiving wallet
+ * is configured.
+ *
+ * There is deliberately NO default here. In particular this never
+ * falls back to the shared/publisher treasury wallet (raaru.skr):
+ * that wallet is the publisher signer and consolidated treasury for
+ * the estate, and pre-join linkability is exactly what the dedicated
+ * wallet exists to prevent (TRACE pre-join decision, 2026-10-21).
+ *
+ * The dedicated PAPER MOON receiving wallet does not exist yet, so
+ * this ships EMPTY by design: [configuredReceivingWallet] is null,
+ * [railOpen] is false, and every purchase attempt is refused before
+ * any sheet, transaction, or charge can happen — visibly (a named
+ * refusal the UI surfaces) and safely (no other recipient is ever
+ * substituted).
+ *
+ * Opening the rail is a one-line change made only when the owner
+ * provides the dedicated wallet address: set [CONFIGURED_RECEIVING_WALLET]
+ * to that Base58 address. Nothing else in the purchase path changes.
+ */
+object ReceivingWalletConfig {
+    /**
+     * The dedicated PAPER MOON receiving wallet, Base58.
+     * SHIPS EMPTY (null) BY DESIGN — see class doc.
+     */
+    private const val CONFIGURED_RECEIVING_WALLET: String = ""
+
+    /** The configured receiving wallet, or null when unconfigured. */
+    val configuredReceivingWallet: String?
+        get() = CONFIGURED_RECEIVING_WALLET.takeIf { candidate ->
+            candidate.isNotBlank() && runCatching {
+                com.hindsight.app.util.Base58.decode(candidate).size == 32
+            }.getOrDefault(false)
+        }
+
+    /** True only when a valid dedicated receiving wallet is configured. */
+    val railOpen: Boolean
+        get() = configuredReceivingWallet != null
+
+    /** Named refusal surfaced when the rail is attempted while closed. */
+    const val RAIL_CLOSED_MESSAGE: String =
+        "Day-pass sales are not open yet: the publisher has not enabled sales on this build."
+}

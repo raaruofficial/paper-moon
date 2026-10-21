@@ -5,6 +5,16 @@ package com.hindsight.app.util
  *
  * Kept in-tree on purpose: it avoids pulling a whole crypto utility library
  * just to display wallet addresses and signatures.
+ *
+ * MONEY-BUILD FIX (v0.2.0): the v0.1.3 conversion loops read the
+ * already-converted digit region as zero (`if (i >= outputStart) 0
+ * else …` — the guard was inverted), so encode/decode only ever
+ * reflected the final input element: "hello world" encoded to "2j",
+ * and no multi-byte value round-tripped. The loops now read the
+ * buffer unconditionally (the canonical BitcoinJ form; unwritten
+ * slots are zero). Proven by the round-trip + known-vector checks in
+ * verification/MoneyBuildHarness.kt. The sealed v0.1.3 line is
+ * untouched; this fix exists only on the money-build line.
  */
 object Base58 {
     private const val ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -25,7 +35,7 @@ object Base58 {
             var carry = input[inputStart].toInt() and 0xFF
             var i = encoded.size - 1
             while (i >= outputStart || carry != 0) {
-                carry += 256 * (if (i >= outputStart) 0 else encoded[i].toInt() and 0xFF)
+                carry += 256 * (encoded[i].toInt() and 0xFF)
                 encoded[i] = (carry % 58).toByte()
                 carry /= 58
                 i--
@@ -54,7 +64,7 @@ object Base58 {
             var carry = digit
             var i = decoded.size - 1
             while (i >= outputStart || carry != 0) {
-                carry += 58 * (if (i >= outputStart) 0 else decoded[i].toInt() and 0xFF)
+                carry += 58 * (decoded[i].toInt() and 0xFF)
                 decoded[i] = (carry % 256).toByte()
                 carry = carry shr 8
                 i--
