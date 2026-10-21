@@ -1,5 +1,54 @@
 # PATCH_NOTES — money-build-v0.2.0
 
+## 2026-10-21 — AC-10 sprint: P-6 photosafety method + cure (decision 19 executed)
+
+**Method first.** The bankai record's ~28/sec spike-onset figure
+could not be reproduced by the fix wave's jsdom harness
+(0.40–1.10/sec). Its method is unpreserved, and code inspection
+bounds what any DOM-onset method can read on this bundle (sealed
+v0.1.3 spike code is byte-identical to this line's pre-cure code):
+candle rates {1:1.2, 4:5, 16:20, 64:60}/sec with a 350 ms
+coalesce at ≥16× cap onsets at 1.2 / 5 / ~2.86 / ~2.86 per sec.
+One reconciliation datum: the densest 72-candle window of the
+worst-case dataset contains exactly **28 ATH** — the quoted
+figure is consistent with spike *triggers* counted over a window
+(or at 64×, where that window passes in ~1.2 s), not rendered
+onsets/sec. Labelled inference, not proof; the original method
+stays unpreserved.
+
+**Standing instrument:** `verification/photosafety_chromium.js` —
+headless Chromium 152 (WebView engine family), 412×915 @ DPR 2,
+real time (the loop's onset rates are dt-driven, so they are
+renderer-independent; CDP virtual time was tried and rejected —
+in this build it advances timers while starving rAF), real
+bundle + datasets, pass-active fake bridge, worst case eth-defi
+(92 ATH / 610 candles), FULL rides at native pacing. Metric:
+max `.spike` onsets in any sliding 1-second window vs the WCAG
+2.3.1 bar (≤3 flashes in any 1 s). Fidelity limits are stated in
+the harness header: headless-on-server is the upper envelope a
+device can reach (frame drops only lower rates), not a
+physical-device reading and not a clinical clearance.
+
+**Baseline (pre-cure, full rides):** max onsets in any 1 s =
+**3 (1×) · 5 (4×) · 4 (16×) · 5 (64×)** — three speeds breach the
+bar in bursts (the ≥16×-only coalesce leaked); banners ≤1 in any
+1 s at every speed (serialized at 2.3 s — not a flash source).
+
+**Cure** (`0330015`, bundle render path only, datasets
+untouched): one rate gate at the `spawnSpike` choke point —
+`athSpike` enforces a **500 ms minimum onset interval at all
+speeds**, bursts coalescing to the highest price in the window
+(the pre-cure ≥16× semantics, universalized); the pending spike
+is bound to its ride and cleared on launch/finish, so no caller
+can bypass the cap and no spike leaks across rides.
+
+**Post-cure (same instrument, full rides):** max onsets in any
+1 s = **2 (1×) · 2 (4×) · 3 (16× — at the threshold, never over)
+· 2 (64×)**; averages 0.18 / 0.74 / 1.17 / 1.96 per sec; onsets
+emitted 92 / 91 / 36 / 22 of 92 ATH (bursts coalesced at speed,
+each showing its window max). **The bar is met at every speed on
+this instrument.** Seal record: `docs/AC10_SEAL_RECORD.md`.
+
 ## 2026-10-20/21 — Fix wave (bankai #3 PM findings; AC-10 seal-blocking items)
 
 Branch head after this wave: `4e9c396`. Sealed v0.1.3 untouched.
