@@ -58,23 +58,27 @@ object MoneyConfig {
  * the estate, and pre-join linkability is exactly what the dedicated
  * wallet exists to prevent (TRACE pre-join decision, 2026-10-21).
  *
- * The dedicated PAPER MOON receiving wallet does not exist yet, so
- * this ships EMPTY by design: [configuredReceivingWallet] is null,
- * [railOpen] is false, and every purchase attempt is refused before
- * any sheet, transaction, or charge can happen — visibly (a named
- * refusal the UI surfaces) and safely (no other recipient is ever
- * substituted).
+ * The dedicated PAPER MOON receiving wallet was created on
+ * 2026-10-20 under the owner's delegation (TRACE pre-join decision:
+ * separate receiving wallet, swept to raaru.skr) and its address is
+ * configured below — the one-line change this doc always described.
+ * Custody: ~/workspace/receiving-wallets/ (keys sealed 0600, encrypted
+ * backup bundle restore-proven at creation).
  *
- * Opening the rail is a one-line change made only when the owner
- * provides the dedicated wallet address: set [CONFIGURED_RECEIVING_WALLET]
- * to that Base58 address. Nothing else in the purchase path changes.
+ * Configuring the address does NOT open sales: this line's rail opens
+ * only at the AC-10 seal + flip gates. In any build where this value
+ * were blank, [configuredReceivingWallet] is null, [railOpen] is
+ * false, and every purchase attempt is refused before any sheet,
+ * transaction, or charge can happen — visibly (a named refusal the
+ * UI surfaces) and safely (no other recipient is ever substituted).
  */
 object ReceivingWalletConfig {
     /**
      * The dedicated PAPER MOON receiving wallet, Base58.
-     * SHIPS EMPTY (null) BY DESIGN — see class doc.
+     * Set 2026-10-20 by decision (see class doc); never the shared
+     * treasury — the harness pins both facts.
      */
-    private const val CONFIGURED_RECEIVING_WALLET: String = ""
+    private const val CONFIGURED_RECEIVING_WALLET: String = "41FFd2wK8Uoy75TVYDx6bXZzscPH3UihwpuiX8fAtQYe"
 
     /** The configured receiving wallet, or null when unconfigured. */
     val configuredReceivingWallet: String?

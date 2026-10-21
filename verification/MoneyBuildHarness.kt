@@ -48,20 +48,26 @@ class CountingSender(var outcome: SendOutcome) : WalletSender {
 }
 
 fun main() {
-    println("== GATE: fail-closed receiving wallet (pre-join mitigation) ==")
-    check("GATE shipped config: no receiving wallet configured", ReceivingWalletConfig.configuredReceivingWallet == null)
-    check("GATE shipped config: rail closed", !ReceivingWalletConfig.railOpen)
+    println("== GATE: dedicated receiving wallet + fail-closed mechanics (pre-join mitigation) ==")
+    // Decided state (2026-10-20, TRACE pre-join decision under owner
+    // delegation): the dedicated PAPER MOON receiving wallet exists and
+    // is configured. Sales opening remains gated by AC-10 + flip; the
+    // fail-closed mechanics below are proven against INJECTED
+    // unconfigured/closed providers — the state any build without the
+    // decided wallet must refuse in.
+    check("GATE configured wallet is the dedicated PM receiving wallet",
+        ReceivingWalletConfig.configuredReceivingWallet == "41FFd2wK8Uoy75TVYDx6bXZzscPH3UihwpuiX8fAtQYe")
     check("GATE configured wallet is never the shared treasury", ReceivingWalletConfig.configuredReceivingWallet != SHARED_TREASURY)
     run {
-        val flow = PurchaseFlow(InMemorySecureStore())
+        val flow = PurchaseFlow(InMemorySecureStore(), railOpenProvider = { false })
         check("GATE beginIntent refuses (RailClosed)", flow.beginIntent(MoneyConfig.ITEM_DAY_PASS) is PurchaseFlow.BeginResult.RailClosed)
-        check("GATE no purchase sheet while closed", PurchaseSheetData.forDayPass() == null)
-        check("GATE tx builder refuses while closed", TransactionBuilder.buildDayPassPurchase(Base58.encode(ByteArray(32) { 3 }), FixedBlockhash()) == null)
-        val settlement = SettlementVerifier(FakeChain(null))
+        check("GATE no purchase sheet while unconfigured", PurchaseSheetData.forDayPass { null } == null)
+        check("GATE tx builder refuses while unconfigured", TransactionBuilder.buildDayPassPurchase(Base58.encode(ByteArray(32) { 3 }), FixedBlockhash()) { null } == null)
+        val settlement = SettlementVerifier(FakeChain(null)) { null }
         check("GATE settlement verdict RAIL_UNCONFIGURED", settlement.verify("anysig") == SettlementVerifier.Verdict.RAIL_UNCONFIGURED)
         val coord = PurchaseCoordinator(flow, EntitlementLedger(InMemorySecureStore()),
             settlement, FixedBlockhash(), CountingSender(SendOutcome.Sent("s")), object : SheetConfirmer {
-                override fun confirm(sheet: PurchaseSheetData) = true })
+                override fun confirm(sheet: PurchaseSheetData) = true }, { null })
         check("GATE coordinator purchase refuses (RailClosed)",
             coord.purchase(MoneyConfig.ITEM_DAY_PASS, Base58.encode(ByteArray(32) { 3 })) is PurchaseResult.RailClosed)
     }

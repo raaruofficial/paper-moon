@@ -1,5 +1,17 @@
 # PATCH_NOTES — money-build-v0.2.0
 
+## 2026-10-20 — Receiving wallet configured (TRACE pre-join decision, owner delegation)
+
+- `ReceivingWalletConfig.CONFIGURED_RECEIVING_WALLET` set to the dedicated
+  PAPER MOON receiving wallet `41FFd2wK8Uoy75TVYDx6bXZzscPH3UihwpuiX8fAtQYe`
+  (created 2026-10-20; custody `~/workspace/receiving-wallets/`, backup
+  bundle restore-proven). This is the one-line change the config always
+  described. It does NOT open sales: AC-10 seal + flip gates still govern.
+- Harness GATE block re-pointed to the decided state: configured wallet
+  pinned to the exact dedicated address and never the shared treasury;
+  fail-closed mechanics now proven against injected unconfigured/closed
+  providers. Harness: 64 checks, 0 failures (`verification/run_harness.sh`).
+
 ## 2026-10-20/21 — Money build Part A (AC-01…AC-09 buildable legs)
 
 Line: branch `money-build-v0.2.0` from sealed HEAD `64095e5` (v0.1.3).
