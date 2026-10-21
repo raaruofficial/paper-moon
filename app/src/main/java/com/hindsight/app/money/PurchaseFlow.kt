@@ -25,13 +25,17 @@ enum class PurchaseState {
     UNKNOWN
 }
 
-/** The terminal (or replayable) outcome of a purchase intent. */
+/** The terminal (or replayable) outcome of a purchase intent.
+ *  [buyerIdentity] binds the outcome to its buyer so reconciliation
+ *  can attribute a recovered signature to the right identity; it is
+ *  null in records written before the field existed. */
 data class PurchaseOutcome(
     val idempotencyKey: String,
     val state: PurchaseState,
     val signature: String?,
     val errorClass: TxErrorClass?,
-    val message: String
+    val message: String,
+    val buyerIdentity: String? = null
 )
 
 /**
@@ -85,24 +89,57 @@ class PurchaseFlow(
     }
 
     /** Record a state transition for an intent. Terminal states stick:
-     *  a GRANTED/FAILED outcome is never overwritten by a later replay. */
+     *  a GRANTED/FAILED outcome is never overwritten by a later replay.
+     *  Returns false when the transition could not be durably
+     *  recorded — callers that hand money-shaped state to this method
+     *  must not pretend otherwise.
+     *
+     *  The in-flight slot is released at PENDING_SETTLEMENT as well
+     *  as at the terminal states: once a signature exists, the
+     *  durable outcome + the ledger's pending journal carry the
+     *  purchase, and the coordinator's unresolved-outcome guard —
+     *  not this in-memory slot — is what stops a second charge
+     *  (bankai #3 MAJOR-2: PENDING_SETTLEMENT previously wedged the
+     *  item in flight for the process's whole life). */
     @Synchronized
-    fun recordOutcome(outcome: PurchaseOutcome) {
+    fun recordOutcome(outcome: PurchaseOutcome): Boolean {
         val existing = outcomeFor(outcome.idempotencyKey)
         if (existing != null &&
             (existing.state == PurchaseState.GRANTED || existing.state == PurchaseState.FAILED)
         ) {
-            return
+            return true
         }
-        persistOutcome(outcome)
-        if (outcome.state == PurchaseState.GRANTED || outcome.state == PurchaseState.FAILED) {
+        val persisted = persistOutcome(outcome)
+        if (outcome.state == PurchaseState.GRANTED ||
+            outcome.state == PurchaseState.FAILED ||
+            outcome.state == PurchaseState.PENDING_SETTLEMENT
+        ) {
             inFlight.values.remove(outcome.idempotencyKey)
         }
+        return persisted
     }
 
     @Synchronized
     fun outcomeFor(idempotencyKey: String): PurchaseOutcome? =
         store.get(KEY_PREFIX + idempotencyKey)?.let { decode(it) }
+
+    /**
+     * Every outcome still carrying an unresolved sent signature —
+     * PENDING_SETTLEMENT or UNKNOWN with a signature. These are the
+     * recovery candidates reconciliation settles, and the guard the
+     * coordinator consults before minting any new intent: an
+     * unresolved outcome is never silently dropped from this list —
+     * it leaves only by reaching GRANTED or FAILED.
+     */
+    @Synchronized
+    fun unresolvedOutcomes(): List<PurchaseOutcome> =
+        store.keysWithPrefix(KEY_PREFIX)
+            .mapNotNull { store.get(it) }
+            .mapNotNull { decode(it) }
+            .filter {
+                (it.state == PurchaseState.PENDING_SETTLEMENT ||
+                    it.state == PurchaseState.UNKNOWN) && it.signature != null
+            }
 
     /**
      * Launch reconcile (ENT-4): any intent left in a non-terminal,
@@ -131,9 +168,8 @@ class PurchaseFlow(
         return unknown
     }
 
-    private fun persistOutcome(outcome: PurchaseOutcome) {
+    private fun persistOutcome(outcome: PurchaseOutcome): Boolean =
         store.put(KEY_PREFIX + outcome.idempotencyKey, encode(outcome))
-    }
 
     private fun encode(o: PurchaseOutcome): String = JSONObject()
         .put("key", o.idempotencyKey)
@@ -141,6 +177,7 @@ class PurchaseFlow(
         .put("sig", o.signature ?: JSONObject.NULL)
         .put("err", o.errorClass?.name ?: JSONObject.NULL)
         .put("msg", o.message)
+        .put("buyer", o.buyerIdentity ?: JSONObject.NULL)
         .toString()
 
     private fun decode(raw: String): PurchaseOutcome? = runCatching {
@@ -150,7 +187,8 @@ class PurchaseFlow(
             state = PurchaseState.valueOf(j.getString("state")),
             signature = if (j.isNull("sig")) null else j.getString("sig"),
             errorClass = if (j.isNull("err")) null else TxErrorClass.valueOf(j.getString("err")),
-            message = j.getString("msg")
+            message = j.getString("msg"),
+            buyerIdentity = if (j.isNull("buyer")) null else j.getString("buyer")
         )
     }.getOrNull()
 

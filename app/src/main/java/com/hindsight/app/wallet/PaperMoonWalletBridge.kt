@@ -253,6 +253,17 @@ class PaperMoonWalletBridge(
                         .put("errorClass", result.errorClass.name)
                     resolveErr(requestId, result.errorClass.userMessage, data)
                 }
+                is PurchaseResult.SettlementRefused -> {
+                    data.put("state", "settlement-refused")
+                        .put("signature", result.signature)
+                        .put("verdict", result.verdict.name)
+                    resolveErr(
+                        requestId,
+                        "The payment did not verify as a day-pass payment on-chain " +
+                            "(${result.verdict.name}). Nothing was granted; the outcome was recorded.",
+                        data
+                    )
+                }
                 is PurchaseResult.RailClosed -> {
                     data.put("state", "rail-closed")
                     resolveErr(requestId, ReceivingWalletConfig.RAIL_CLOSED_MESSAGE, data)

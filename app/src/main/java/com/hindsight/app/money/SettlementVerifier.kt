@@ -74,7 +74,21 @@ class SettlementVerifier(
         WRONG_MINT,
         SHORT_AMOUNT,
         RAIL_UNCONFIGURED,
-        RPC_UNREACHABLE
+        RPC_UNREACHABLE;
+
+        /**
+         * True when the chain has given a FINAL answer that this
+         * signature is not a valid day-pass payment: the transaction
+         * exists and failed, or it paid the wrong recipient, the
+         * wrong mint, or too little. A definitive refusal resolves a
+         * pending purchase (recorded, nothing granted) instead of
+         * leaving it pending forever. NOT_FOUND (propagation lag)
+         * and RPC_UNREACHABLE / RAIL_UNCONFIGURED (connectivity /
+         * configuration) are NOT definitive — those stay pending.
+         */
+        fun isDefinitiveRefusal(): Boolean =
+            this == TX_FAILED || this == WRONG_RECIPIENT ||
+                this == WRONG_MINT || this == SHORT_AMOUNT
     }
 
     fun verify(signature: String): Verdict {

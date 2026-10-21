@@ -47,6 +47,20 @@ class CountingSender(var outcome: SendOutcome) : WalletSender {
     override fun sendTransaction(serializedTransaction: ByteArray): SendOutcome { calls++; return outcome }
 }
 
+/** Fault-injecting store for the bankai #3 crash-injection tests:
+ *  puts to keys matching [failWhen] report failure (not recorded),
+ *  exactly the SecureKeyValueStore contract's false case. Healing =
+ *  resetting [failWhen]; "process death" = dropping every
+ *  flow/ledger/coordinator object and rebuilding over this store. */
+class PutFailStore(val inner: InMemorySecureStore = InMemorySecureStore()) : SecureKeyValueStore {
+    var failWhen: (String) -> Boolean = { false }
+    override fun get(key: String): String? = inner.get(key)
+    override fun put(key: String, value: String): Boolean =
+        if (failWhen(key)) false else inner.put(key, value)
+    override fun remove(key: String) = inner.remove(key)
+    override fun keysWithPrefix(prefix: String): Set<String> = inner.keysWithPrefix(prefix)
+}
+
 fun main() {
     println("== GATE: dedicated receiving wallet + fail-closed mechanics (pre-join mitigation) ==")
     // Decided state (2026-10-20, TRACE pre-join decision under owner
@@ -276,6 +290,147 @@ fun main() {
             relaunched.remainingFor(idA) == 2)
         relaunched.consumeOne(idA); relaunched.consumeOne(idA)
         check("AC-07 exhausting the grant sticks at 0", relaunched.remainingFor(idA) == 0 && relaunched.consumeOne(idA) == -1)
+    }
+
+    println("== FIX WAVE bankai #3 MAJOR-2: settlement-write complex (crash injection) ==")
+    run {
+        val alwaysOk = object : SheetConfirmer { override fun confirm(sheet: PurchaseSheetData) = true }
+        fun coordFor(store: SecureKeyValueStore, flow: PurchaseFlow, chain: FakeChain, sender: CountingSender) =
+            PurchaseCoordinator(flow, EntitlementLedger(store) { now }, SettlementVerifier(chain) { TEST_RECIPIENT },
+                FixedBlockhash(), sender, alwaysOk) { TEST_RECIPIENT }
+
+        // (a) The pending journal never overwrites: two buyers' sent
+        // purchases coexist, each attributed to its own buyer. The old
+        // single slot erased the first when the second was recorded.
+        val journalStore = InMemorySecureStore()
+        val journal = EntitlementLedger(journalStore) { now }
+        val buyerB = Base58.encode(ByteArray(32) { 42 })
+        check("FIX2 journal records first pending", journal.recordPending("sig-a", pubB58, "key-a"))
+        check("FIX2 journal records second pending without erasing the first",
+            journal.recordPending("sig-b", buyerB, "key-b") &&
+                journal.pendingFor(pubB58) == "sig-a" && journal.pendingFor(buyerB) == "sig-b" &&
+                journal.activePendingEntries().size == 2)
+        check("FIX2 journal re-record is idempotent, never an overwrite",
+            journal.recordPending("sig-a", buyerB, "key-x") &&
+                journal.pendingEntry("sig-a")!!.buyerIdentity == pubB58 &&
+                journal.pendingEntry("sig-a")!!.idempotencyKey == "key-a")
+        val failStore = PutFailStore()
+        failStore.failWhen = { it.startsWith("pending:") }
+        check("FIX2 recordPending reports an unrecorded write as false",
+            !EntitlementLedger(failStore) { now }.recordPending("sig-z", pubB58, "key-z"))
+
+        // (b) Crash between broadcast and the journal write: the
+        // journal write fails during the purchase, the chain is
+        // unreachable, the purchase is Pending. After "process
+        // death" (all objects rebuilt over the same store) and
+        // healing, reconciliation recovers the signature from the
+        // INTENT OUTCOME record alone and grants.
+        val crashStore = PutFailStore()
+        crashStore.failWhen = { it.startsWith("pending:") }
+        val crashFlow = PurchaseFlow(crashStore, railOpenProvider = { true })
+        val crashChain = FakeChain(null)
+        val crashCoord = coordFor(crashStore, crashFlow, crashChain, CountingSender(SendOutcome.Sent("sig-crash")))
+        val crashResult = crashCoord.purchase(MoneyConfig.ITEM_DAY_PASS, pubB58)
+        check("FIX2 unjournaled sent purchase is Pending, not lost, not granted",
+            crashResult is PurchaseResult.Pending &&
+                EntitlementLedger(crashStore) { now }.activePendingEntries().isEmpty() &&
+                crashFlow.unresolvedOutcomes().size == 1)
+        crashStore.failWhen = { false }
+        crashChain.tx = txTo(TEST_RECIPIENT, usdc, price)
+        val relaunchFlow = PurchaseFlow(crashStore, railOpenProvider = { true })
+        val relaunchCoord = coordFor(crashStore, relaunchFlow, crashChain, CountingSender(SendOutcome.Sent("unused")))
+        check("FIX2 relaunch reconciliation grants from the outcome record alone",
+            relaunchCoord.reconcileOnLaunch(pubB58).passActive &&
+                EntitlementLedger(crashStore) { now }.receiptForSignature("sig-crash") != null)
+
+        // (c) Grant write failure: settlement VERIFIED but the
+        // receipt cannot be durably recorded — the purchase stays
+        // Pending (never granted on a failed write); after healing,
+        // reconciliation retries and the grant lands, with the
+        // by-signature and by-key lookups returning the SAME receipt
+        // (the old two-put grant could orphan the index).
+        val grantStore = PutFailStore()
+        grantStore.failWhen = { it.startsWith("receipt:") }
+        val grantFlow = PurchaseFlow(grantStore, railOpenProvider = { true })
+        val grantChain = FakeChain(txTo(TEST_RECIPIENT, usdc, price))
+        val grantCoord = coordFor(grantStore, grantFlow, grantChain, CountingSender(SendOutcome.Sent("sig-grant")))
+        val grantResult = grantCoord.purchase(MoneyConfig.ITEM_DAY_PASS, pubB58)
+        check("FIX2 unverifiable-write grant stays Pending, nothing granted",
+            grantResult is PurchaseResult.Pending &&
+                !EntitlementLedger(grantStore) { now }.entitlementFor(pubB58).passActive)
+        grantStore.failWhen = { false }
+        val grantLedger = EntitlementLedger(grantStore) { now }
+        val grantKey = grantLedger.pendingEntry("sig-grant")!!.idempotencyKey
+        val healedCoord = coordFor(grantStore, PurchaseFlow(grantStore, railOpenProvider = { true }),
+            grantChain, CountingSender(SendOutcome.Sent("unused")))
+        healedCoord.reconcileOnLaunch(pubB58)
+        check("FIX2 healed reconciliation grants; by-key and by-signature receipts are the same record",
+            grantLedger.entitlementFor(pubB58).passActive &&
+                grantLedger.receiptForSignature("sig-grant") != null &&
+                grantLedger.receiptForIdempotencyKey(grantKey)?.signature == "sig-grant" &&
+                grantLedger.receiptForIdempotencyKey(grantKey)?.grantedAtMs ==
+                    grantLedger.receiptForSignature("sig-grant")?.grantedAtMs)
+
+        // (d) A definitive on-chain refusal RESOLVES the purchase:
+        // SettlementRefused, outcome FAILED, journal REFUSED — and
+        // the buyer is not wedged: a fresh purchase can proceed.
+        val refuseChain = FakeChain(txTo(buyerB, usdc, price)) // pays the wrong recipient
+        val refuseStore = InMemorySecureStore()
+        val refuseFlow = PurchaseFlow(refuseStore, railOpenProvider = { true })
+        val refuseLedger = EntitlementLedger(refuseStore) { now }
+        val refuseSender = CountingSender(SendOutcome.Sent("sig-refused"))
+        val refuseCoord = PurchaseCoordinator(refuseFlow, refuseLedger, SettlementVerifier(refuseChain) { TEST_RECIPIENT },
+            FixedBlockhash(), refuseSender, alwaysOk) { TEST_RECIPIENT }
+        val refused = refuseCoord.purchase(MoneyConfig.ITEM_DAY_PASS, pubB58)
+        check("FIX2 definitive refusal resolves as SettlementRefused (WRONG_RECIPIENT)",
+            refused is PurchaseResult.SettlementRefused &&
+                refused.verdict == SettlementVerifier.Verdict.WRONG_RECIPIENT &&
+                refuseLedger.pendingEntry("sig-refused")?.status == PendingEntry.Status.REFUSED &&
+                refuseFlow.unresolvedOutcomes().isEmpty() &&
+                !refuseLedger.entitlementFor(pubB58).passActive)
+        refuseChain.tx = txTo(TEST_RECIPIENT, usdc, price)
+        refuseSender.outcome = SendOutcome.Sent("sig-after-refusal")
+        check("FIX2 buyer can purchase afresh after a recorded refusal",
+            refuseCoord.purchase(MoneyConfig.ITEM_DAY_PASS, pubB58) is PurchaseResult.Granted &&
+                refuseSender.calls == 2)
+
+        // (e) PENDING_SETTLEMENT no longer wedges the item in flight
+        // for the process's life, and a replayed purchase binds to
+        // the original — it settles the original signature instead
+        // of sending a second transaction.
+        val wedgeStore = InMemorySecureStore()
+        val wedgeFlow = PurchaseFlow(wedgeStore, railOpenProvider = { true })
+        val wedgeChain = FakeChain(null) // offline: purchase stays pending
+        val wedgeSender = CountingSender(SendOutcome.Sent("sig-wedge"))
+        val wedgeCoord = coordFor(wedgeStore, wedgeFlow, wedgeChain, wedgeSender)
+        val first = wedgeCoord.purchase(MoneyConfig.ITEM_DAY_PASS, pubB58)
+        check("FIX2 offline purchase is Pending", first is PurchaseResult.Pending)
+        check("FIX2 item is not wedged in flight after PENDING_SETTLEMENT",
+            wedgeFlow.beginIntent(MoneyConfig.ITEM_DAY_PASS) is PurchaseFlow.BeginResult.Begun)
+        wedgeFlow.reconcileOnLaunch() // clear the probe intent's in-flight slot
+        val replay = wedgeCoord.purchase(MoneyConfig.ITEM_DAY_PASS, pubB58)
+        check("FIX2 replay binds to the original purchase — no second send",
+            replay is PurchaseResult.Pending && replay.signature == "sig-wedge" && wedgeSender.calls == 1)
+
+        // (f) UNKNOWN outcomes are retained, not discarded: offline
+        // reconciliation keeps the candidate; a later definitive
+        // verdict resolves it to FAILED with the record intact.
+        val unkStore = InMemorySecureStore()
+        val unkFlow = PurchaseFlow(unkStore, railOpenProvider = { true })
+        val unkChain = FakeChain(null)
+        val unkCoord = coordFor(unkStore, unkFlow, unkChain, CountingSender(SendOutcome.Sent("sig-unk")))
+        unkCoord.purchase(MoneyConfig.ITEM_DAY_PASS, pubB58)
+        unkCoord.reconcileOnLaunch(pubB58) // still offline
+        val unkKey = unkFlow.unresolvedOutcomes().single().idempotencyKey
+        check("FIX2 offline reconciliation retains the UNKNOWN candidate",
+            unkFlow.outcomeFor(unkKey)?.state == PurchaseState.UNKNOWN &&
+                EntitlementLedger(unkStore) { now }.activePendingEntries().size == 1)
+        unkChain.tx = txTo(TEST_RECIPIENT, usdc, price, failed = true)
+        unkCoord.reconcileOnLaunch(pubB58)
+        check("FIX2 definitive verdict at reconcile resolves UNKNOWN to FAILED, record kept",
+            unkFlow.outcomeFor(unkKey)?.state == PurchaseState.FAILED &&
+                unkFlow.unresolvedOutcomes().isEmpty() &&
+                EntitlementLedger(unkStore) { now }.pendingEntry("sig-unk")?.status == PendingEntry.Status.REFUSED)
     }
 
     println("== AC-09: single price source ==")
