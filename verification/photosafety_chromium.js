@@ -73,6 +73,13 @@ const { spawn } = require('child_process');
 const WebSocket = require('/home/hatch/workspace/ts-spaces/bomb-plate-duel/node_modules/ws');
 
 const CHROME = process.env.CHROME_BIN || '/opt/meta-chromium/chrome';
+// Device scale factor for the run. Default 2 (device-faithful
+// raster). PS_DSF=1 quarters the software-raster cost on loaded
+// hosts; onset TIMING is DPR-independent (the loop is dt-driven
+// and onsets are DOM appends on the page clock), so a pacing-
+// valid DSF-1 run measures the same timing behaviour. The DSF in
+// use is printed with the results and must be quoted with them.
+const DSF = +(process.env.PS_DSF || '2');
 const bundlePath = process.argv[2] ||
   path.join(__dirname, '..', 'app', 'src', 'main', 'assets', 'game', 'index.html');
 const html = fs.readFileSync(bundlePath, 'utf8');
@@ -178,7 +185,7 @@ async function connectChrome(speed) {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'ps-profile-'));
   const chrome = spawn(CHROME, [
     '--headless=new', '--disable-gpu', '--no-sandbox', '--mute-audio',
-    '--window-size=412,915', '--force-device-scale-factor=2',
+    '--window-size=412,915', '--force-device-scale-factor=' + DSF,
     '--disable-frame-rate-limit', '--disable-gpu-vsync',
     '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
     '--run-all-compositor-stages-before-draw',
@@ -232,7 +239,7 @@ async function runSpeed(speed, fileUrl, plan) {
     await send('Page.enable', {}, sid);
     await send('Runtime.enable', {}, sid);
     await send('Emulation.setDeviceMetricsOverride',
-      { width: 412, height: 915, deviceScaleFactor: 2, mobile: true }, sid);
+      { width: 412, height: 915, deviceScaleFactor: DSF, mobile: true }, sid);
     // Force steady compositor frame production (frames discarded,
     // acked in the message handler).
     await send('Page.startScreencast',
@@ -374,7 +381,7 @@ function maxInWindow(ts) {
     );
   }
   fs.rmSync(dir, { recursive: true, force: true });
-  console.log('\nMethod: headless Chromium 152 (WebView engine family), 412×915 @ DPR 2,');
+  console.log('\nMethod: headless Chromium 152 (WebView engine family), 412×915 @ DPR ' + DSF + ',');
   console.log('real time (dt-driven loop: onset rates are renderer-independent), real');
   console.log('bundle + datasets, pass-active fake bridge, sustained worst case');
   console.log('(eth-defi). NOT a physical-device reading and NOT a photosensitivity');
