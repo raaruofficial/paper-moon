@@ -69,6 +69,12 @@ sealed interface PurchaseResult {
         val verdict: SettlementVerifier.Verdict
     ) : PurchaseResult
 
+    /** The buyer already holds an active pass for this item: a
+     *  second purchase would deliver nothing incremental, so nothing
+     *  was charged, the window was NOT refreshed, and the attempt
+     *  was recorded as a non-delivery (Terms §7(b)). */
+    data class DuplicateActivePass(val expiresAtMs: Long) : PurchaseResult
+
     data object RailClosed : PurchaseResult
     data object UnknownItem : PurchaseResult
     data class AlreadyInFlight(val idempotencyKey: String) : PurchaseResult
@@ -78,10 +84,10 @@ sealed interface PurchaseResult {
 /**
  * Orchestrates one purchase end to end (AC-04 → AC-05 → AC-06):
  *
- *   unresolved guard → gate check → intent (idempotency key) →
- *   native sheet → shell-built transaction → wallet sign-and-send →
- *   signature recorded (intent outcome, then pending journal) →
- *   on-chain settlement re-verification → grant.
+ *   unresolved guard → duplicate guard → gate check → intent
+ *   (idempotency key) → native sheet → shell-built transaction →
+ *   wallet sign-and-send → signature recorded (intent outcome, then
+ *   pending journal) → on-chain settlement re-verification → grant.
  *
  * The grant comes only from [EntitlementLedger.grantFromVerifiedReceipt]
  * after [SettlementVerifier] returns VERIFIED. Every earlier exit is
@@ -126,12 +132,34 @@ class PurchaseCoordinator(
                 }
             }
 
+        // (2) Duplicate guard (Terms §7(b); bankai #3 MAJOR-5): the
+        // buyer already holds an active pass for this item. A second
+        // purchase would deliver nothing incremental, so nothing is
+        // charged, the existing window is NOT refreshed, and the
+        // attempt is recorded as a non-delivery — the remedy the
+        // Terms promise for a duplicate payment.
+        if (itemId == MoneyConfig.ITEM_DAY_PASS) {
+            val held = ledger.entitlementFor(buyerIdentity)
+            if (held.passActive) {
+                // entitlementFor already established an active pass;
+                // its receipt is the buyer's latest-expiring one.
+                val active = ledger.allReceipts()
+                    .filter { it.buyerIdentity == buyerIdentity }
+                    .maxByOrNull { it.expiresAtMs }
+                ledger.recordNonDelivery(
+                    itemId, buyerIdentity, NON_DELIVERY_DUPLICATE_ACTIVE_PASS,
+                    "active receipt ${active?.signature ?: "unknown"} expires ${held.passExpiresAtMs}"
+                )
+                return PurchaseResult.DuplicateActivePass(held.passExpiresAtMs)
+            }
+        }
+
         val sheet = PurchaseSheetData.forDayPass(receivingWalletProvider) ?: return PurchaseResult.RailClosed
         val key = when (val begun = flow.beginIntent(itemId)) {
             is PurchaseFlow.BeginResult.Begun -> begun.idempotencyKey
             is PurchaseFlow.BeginResult.RailClosed -> return PurchaseResult.RailClosed
             is PurchaseFlow.BeginResult.AlreadyInFlight -> {
-                // (2) In-flight binding: the intent already exists —
+                // (3) In-flight binding: the intent already exists —
                 // return ITS outcome (settling it first if it carries
                 // a signature) rather than starting a second charge.
                 val prior = flow.outcomeFor(begun.existingKey)
@@ -293,5 +321,11 @@ class PurchaseCoordinator(
             settle(key, signature, item, buyer)
         }
         return ledger.entitlementFor(boundIdentityHint)
+    }
+
+    companion object {
+        /** Non-delivery reason recorded for a purchase refused
+         *  against an already-active pass (Terms §7(b)). */
+        const val NON_DELIVERY_DUPLICATE_ACTIVE_PASS: String = "duplicate_active_pass"
     }
 }

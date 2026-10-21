@@ -253,6 +253,16 @@ class PaperMoonWalletBridge(
                         .put("errorClass", result.errorClass.name)
                     resolveErr(requestId, result.errorClass.userMessage, data)
                 }
+                is PurchaseResult.DuplicateActivePass -> {
+                    data.put("state", "duplicate-active")
+                        .put("expiresAtMs", result.expiresAtMs)
+                    resolveErr(
+                        requestId,
+                        "You already hold an active day pass. A second purchase would deliver " +
+                            "nothing, so nothing was charged; the attempt was recorded.",
+                        data
+                    )
+                }
                 is PurchaseResult.SettlementRefused -> {
                     data.put("state", "settlement-refused")
                         .put("signature", result.signature)

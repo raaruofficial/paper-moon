@@ -433,6 +433,42 @@ fun main() {
                 EntitlementLedger(unkStore) { now }.pendingEntry("sig-unk")?.status == PendingEntry.Status.REFUSED)
     }
 
+    println("== FIX WAVE bankai #3 MAJOR-5: duplicate purchase guard (Terms §7(b)) ==")
+    run {
+        val dupStore = InMemorySecureStore()
+        val dupFlow = PurchaseFlow(dupStore, railOpenProvider = { true })
+        val dupLedger = EntitlementLedger(dupStore) { now }
+        val dupChain = FakeChain(txTo(TEST_RECIPIENT, usdc, price))
+        val dupSender = CountingSender(SendOutcome.Sent("sig-dup-1"))
+        val dupCoord = PurchaseCoordinator(dupFlow, dupLedger, SettlementVerifier(dupChain) { TEST_RECIPIENT },
+            FixedBlockhash(), dupSender, object : SheetConfirmer {
+                override fun confirm(sheet: PurchaseSheetData) = true }) { TEST_RECIPIENT }
+        val firstBuy = dupCoord.purchase(MoneyConfig.ITEM_DAY_PASS, pubB58)
+        check("FIX5 first purchase grants", firstBuy is PurchaseResult.Granted && dupSender.calls == 1)
+        val firstExpiry = (firstBuy as PurchaseResult.Granted).receipt.expiresAtMs
+        // The unguarded behaviour: the second purchase charged again
+        // and REFRESHED the window. Now: refused, recorded, untouched.
+        val dup = dupCoord.purchase(MoneyConfig.ITEM_DAY_PASS, pubB58)
+        check("FIX5 duplicate purchase is refused as DuplicateActivePass, no second charge",
+            dup is PurchaseResult.DuplicateActivePass && dup.expiresAtMs == firstExpiry && dupSender.calls == 1)
+        check("FIX5 duplicate attempt is recorded as a non-delivery (§7(b) remedy queue)",
+            dupLedger.nonDeliveries().size == 1 &&
+                dupLedger.nonDeliveries()[0].reason == PurchaseCoordinator.NON_DELIVERY_DUPLICATE_ACTIVE_PASS &&
+                dupLedger.nonDeliveries()[0].buyerIdentity == pubB58)
+        check("FIX5 the active window is NOT refreshed by the duplicate attempt",
+            dupLedger.entitlementFor(pubB58).passExpiresAtMs == firstExpiry &&
+                dupLedger.allReceipts().size == 1)
+        // After the pass expires, purchase works again — the guard
+        // binds to the ACTIVE window, not to the buyer forever.
+        now += MoneyConfig.PASS_DURATION_MS + 1
+        dupSender.outcome = SendOutcome.Sent("sig-dup-2")
+        val afterExpiry = dupCoord.purchase(MoneyConfig.ITEM_DAY_PASS, pubB58)
+        check("FIX5 purchase succeeds again after the active pass expires",
+            afterExpiry is PurchaseResult.Granted && dupSender.calls == 2 &&
+                dupLedger.allReceipts().size == 2)
+        now -= MoneyConfig.PASS_DURATION_MS + 1
+    }
+
     println("== AC-09: single price source ==")
     check("AC-09 price anchor $3.50 (P6-b)", MoneyConfig.PRICE_USD_CENTS == 350L && MoneyConfig.priceUsdDisplay() == "$3.50")
     check("AC-09 rail 3.50 USDC at 6dp = anchor x10^6 (P6-c 1:1)", MoneyConfig.PRICE_USDC_BASE_UNITS == MoneyConfig.PRICE_USD_CENTS * 10_000L)
