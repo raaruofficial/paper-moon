@@ -1,5 +1,81 @@
 # PATCH_NOTES — money-build-v0.2.0
 
+## 2026-10-20/21 — Fix wave (bankai #3 PM findings; AC-10 seal-blocking items)
+
+Branch head after this wave: `4e9c396`. Sealed v0.1.3 untouched.
+Each fix landed as its own commit and was verified by re-running
+the discriminating test that proved the defect.
+
+- **MAJOR-1 — gate state** (`b425038`). At `aba6b30` `railOpen`
+  derived from configuration alone, so configuring the dedicated
+  wallet silently opened the rail in code ("ships closed" refuted;
+  purchase-capable CI artefact). `railOpen` now requires
+  `SALES_ENABLED` (false on this line; flips only in the AC-10
+  seal + flip act) AND a configured wallet. Correction to the entry
+  below: its claim "It does NOT open sales" was not true of the
+  code at `aba6b30`; this fix makes it true. Harness GATE block now
+  pins the production defaults (production flow + coordinator
+  refuse with the decided wallet configured).
+- **MAJOR-2 — settlement-write complex** (`8bbd72b`). Pending
+  settlement is a per-signature journal (ACTIVE/GRANTED/REFUSED,
+  never overwritten, resolved entries retained; the legacy
+  single-slot record migrates in). The grant is a single durable
+  write — the receipt is the source of truth and the by-key lookup
+  is derived by scan (the two-put index orphan is inexpressible).
+  The intent outcome is written before the journal and reconcile
+  scans both, so a crash between broadcast and either write
+  recovers from the other; UNKNOWN outcomes are retained as
+  candidates, never discarded. Replay binds for real (unresolved
+  guard + in-flight outcome binding; the old check read the
+  just-minted key and could never fire). PENDING_SETTLEMENT
+  releases the in-flight slot (was wedged for process life).
+  Definitive on-chain refusals resolve to a recorded FAILED +
+  journal REFUSED (`PurchaseResult.SettlementRefused`) instead of
+  pending forever; NOT_FOUND/RPC stay pending. `PurchaseOutcome`
+  carries `buyerIdentity`.
+- **MAJOR-3 — rookie consume** (`23344ce`). The bundle started the
+  ride loop fire-and-forget after requesting the consume; a failed
+  consume delivered a free, unrecorded ride. The built ride now
+  waits for the shell's ack — success starts the loop, failure (or
+  no shell) rolls the ride back (nothing runs, mirror re-read,
+  player told). Decrement-after-build preserved.
+- **MAJOR-2/AC-09 — copy** (`c42a45b`). `DAILY EDITION · FREE RIDE`
+  kicker and `FREE · DAILY EDITION` launch label replaced with the
+  rookie-ride form of record (`DAILY EDITION · ROOKIE RIDE` /
+  `ROOKIE RIDE · DAILY EDITION`); census now counts both old
+  strings as must-be-0. Datasets untouched.
+- **MAJOR-5 (code side) — duplicate guard** (`fa08a88`). A second
+  purchase against an active pass is refused
+  (`PurchaseResult.DuplicateActivePass`): no charge path entered,
+  window not refreshed, attempt durably recorded as a non-delivery
+  (`EntitlementLedger.recordNonDelivery` — the Terms §7(b) remedy
+  queue). The Terms instrument itself stays DRAFT with
+  `[EFFECTIVE_DATE]` unfilled — flip-gate items, not builder items.
+- **P-6 photosafety** (`4e9c396`). No cure attempted.
+  `verification/photosafety_measure.js` landed (jsdom instrument;
+  sustained worst case eth-defi, 92 ATH / 610 candles): 1× 0.40,
+  4× 0.90, 16× 1.10, 64× 0.70 spike onsets/sec — which do NOT
+  reproduce the ~28/sec figure quoted in the bankai record (its
+  method is not preserved in this repo; spike spawns are
+  structurally capped — candle rate below 16×, a 350 ms coalesce
+  at 16×+ — and jsdom delivers frames slower than a device). The
+  item-19 decision stands (cure, no waiver); the flip remains
+  gated on a cure re-measured before AC-10/flip.
+
+### Verification state (this wave)
+- Harness: **87/87** (`verification/run_harness.sh`) — 64 baseline
+  + 3 gate + 15 crash-injection + 5 duplicate-guard checks.
+- Census: all clean (`verification/census.sh`), incl. the two new
+  AC-09 must-be-0 counts.
+- jsdom bundle gate test: **20/20** (`verification/bundle_gate_test.js`)
+  — incl. failed-consume rollback (Case 5) and copy (Case 6).
+- CI: run **39552052995**, head `4e9c396` — **success**
+  (`assembleDebug` + debug APK upload). Full-source typecheck.sh
+  could not run in this sandbox (its `/tmp/deps` classpath from the
+  original build no longer exists); CI is the packaging authority
+  and compiled all sources, including the bridge's new
+  `PurchaseResult` branches.
+
 ## 2026-10-20 — Receiving wallet configured (TRACE pre-join decision, owner delegation)
 
 - `ReceivingWalletConfig.CONFIGURED_RECEIVING_WALLET` set to the dedicated

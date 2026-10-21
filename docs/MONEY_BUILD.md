@@ -81,4 +81,12 @@ after the ride is built. Datasets are byte-identical to v0.1.3
 - Photosafety P-6 (~28 spike onsets/sec measured): no cure invented
   in this wave; cure-or-waiver is an owner ruling (prep B-5) that
   gates the flip, and AC-10's seal re-audit cannot issue over it.
+  **Addendum (fix wave, 2026-10-20):** the ruling landed — cure, no
+  waiver (decisions register item 19). A measurement harness now
+  stands at `verification/photosafety_measure.js`; its jsdom
+  readings (peak 1.10 onsets/sec on the sustained worst case) do
+  not reproduce the ~28/sec figure, whose method is not preserved
+  in this repo. No cure was attempted on an unreconciled
+  measurement; the cure is still owed and re-measurement gates the
+  flip.
 - AC-10 seal re-audit: runs on the finished build at seal time.
