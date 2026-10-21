@@ -59,9 +59,27 @@ Harness gate tests pin this.
 - Harness: 65/65 checks PASS (`verification/run_harness.sh`).
 - Census: all clean (`verification/census.sh`).
 - Bundle JS: parses (node), dataset segment hash matches sealed.
-- Android assembleDebug: see build log status in the coordinator
-  report — glue code is source-verified + census-verified; the
-  Gradle build result is recorded in PATCH_NOTES when run.
+- Full-source Kotlin type-check: ALL 27 app sources (including every
+  new Android glue file) type-check with ZERO frontend errors against
+  android.jar (API 35) + the real dependency jars at the exact
+  build.gradle versions (recipe: verification/typecheck.sh). The
+  check caught and fixed one real issue: MasterKey requires
+  security-crypto 1.1.0-alpha07 (1.0.0 has only the legacy MasterKeys
+  API) — the Gradle dependency was bumped accordingly.
+- Android assembleDebug: NOT completed in the build sandbox — the
+  Gradle daemon starts and the client loses communication with it
+  within seconds, on every attempt (foreground, detached,
+  memory-capped); plain JVMs and loopback HTTP servers in the same
+  sandbox are unaffected, so this reads as a sandbox/Gradle-daemon
+  interaction, not a project defect. CI's build-debug job
+  (assembleDebug on push/PR) is the packaging authority and has not
+  yet run on this branch (branch not pushed). Compose codegen/IR
+  lowering is therefore the one unverified layer; all layers above
+  it (parsing, resolution, type-checking of every file) are verified.
+- jsdom bundle gate test: 13/13 PASS
+  (verification/bundle_gate_test.js) — launch blocked at zero
+  entitlement, claim via shell sign-in, ride + exactly one post-build
+  consumption, day-pass ride with no consumption, purchase routing.
 
 ### Open / next builder picks up here
 1. If not yet green: `./gradlew :app:assembleDebug` and fix any

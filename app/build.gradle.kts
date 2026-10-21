@@ -116,7 +116,7 @@ dependencies {
 
     // AC-02: Keystore-backed EncryptedSharedPreferences for the MWA
     // auth token, entitlement cache, receipts, and claim ledger.
-    implementation("androidx.security:security-crypto:1.0.0")
+    implementation("androidx.security:security-crypto:1.1.0-alpha07")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
