@@ -53,6 +53,15 @@
  * asset itself is never modified by this harness. Chrome is
  * driven over CDP (--dump-dom returns empty in this build).
  *
+ * Pacing validity (added after two starved runs on the loaded
+ * sprint VM): the compositor is forced to produce frames
+ * (screencast, frames discarded) and an in-page probe reports the
+ * window's average fps and worst frame gap. A row is tagged
+ * PACING-VALID only if the ride finished AND avg fps >= 50 AND
+ * worst gap < 250 ms (the loop clamps dt at 50 ms, so gaps under
+ * that keep game time == wall time). Starved rows are reported
+ * but must not be quoted as measurements.
+ *
  * Run: node verification/photosafety_chromium.js [bundlePath]
  * Exit 0 always (measurement, not a gate); prints a table.
  */
@@ -127,6 +136,18 @@ window.__ps = { spikes: [], banners: [], launchedAt: null, doneAt: null, speed: 
         }, 300);
       }, 300);
     }, 300);
+    // Pacing probe: count rAF frames and the worst inter-frame
+    // gap. The ride loop clamps dt at 50 ms, so game time tracks
+    // wall time iff frame gaps stay under ~50 ms; this probe is
+    // what lets a run prove it was not frame-starved.
+    window.__ps.frames = { count: 0, maxGap: 0, lastT: 0 };
+    var frameLoop = function (t) {
+      var f = window.__ps.frames;
+      if (f.lastT) { var g = t - f.lastT; if (g > f.maxGap) f.maxGap = g; }
+      f.lastT = t; f.count++;
+      requestAnimationFrame(frameLoop);
+    };
+    requestAnimationFrame(frameLoop);
     var sawRideVisible = false;
     var poll = setInterval(function () {
       var ride = document.getElementById('ride');
@@ -158,6 +179,9 @@ async function connectChrome(speed) {
   const chrome = spawn(CHROME, [
     '--headless=new', '--disable-gpu', '--no-sandbox', '--mute-audio',
     '--window-size=412,915', '--force-device-scale-factor=2',
+    '--disable-frame-rate-limit', '--disable-gpu-vsync',
+    '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
+    '--run-all-compositor-stages-before-draw',
     '--remote-debugging-port=' + port, '--user-data-dir=' + profile,
     'about:blank'
   ], { stdio: 'ignore' });
@@ -170,14 +194,21 @@ async function connectChrome(speed) {
   await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
   let nextId = 1;
   const pending = new Map();
-  ws.on('message', (raw) => {
-    const msg = JSON.parse(raw);
-    if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
-  });
   const send = (method, params, sessionId) => new Promise((resolve) => {
     const id = nextId++;
     pending.set(id, resolve);
     ws.send(JSON.stringify({ id, method, params: params || {}, sessionId }));
+  });
+  ws.on('message', (raw) => {
+    const msg = JSON.parse(raw);
+    if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
+    // Screencast frames must be acked or the compositor stops
+    // producing them (the screencast itself is what forces steady
+    // frame production in headless; frames are discarded).
+    if (msg.method === 'Page.screencastFrameReceived' && msg.sessionId) {
+      send('Page.screencastFrameAck',
+        { sessionId: msg.params.sessionId }, msg.sessionId).catch(() => {});
+    }
   });
   return { chrome, profile, ws, send };
 }
@@ -202,6 +233,10 @@ async function runSpeed(speed, fileUrl, plan) {
     await send('Runtime.enable', {}, sid);
     await send('Emulation.setDeviceMetricsOverride',
       { width: 412, height: 915, deviceScaleFactor: 2, mobile: true }, sid);
+    // Force steady compositor frame production (frames discarded,
+    // acked in the message handler).
+    await send('Page.startScreencast',
+      { format: 'png', everyNthFrame: 6, maxWidth: 412, maxHeight: 915 }, sid).catch(() => {});
     // Wait for load + autopilot launch (real time).
     let launched = false;
     for (let i = 0; i < 80 && !launched; i++) {
@@ -213,7 +248,12 @@ async function runSpeed(speed, fileUrl, plan) {
     // Let the speed click land and the loop settle.
     await sleep(1200);
 
-    await evaluate(send, sid, 'window.__ps.winT0 = performance.now(); true');
+    await evaluate(send, sid, `(() => {
+      window.__ps.winT0 = performance.now();
+      window.__ps.frames.count0 = window.__ps.frames.count;
+      window.__ps.frames.maxGap = 0;
+      return true;
+    })()`);
     // Wait out the measurement window (real time).
     const deadline = Date.now() + plan.windowMs + 30000;
     let done = false;
@@ -319,11 +359,18 @@ function maxInWindow(ts) {
     const spikes = ps.spikes.filter((t) => t >= t0 && t <= t1).map((t) => t - t0);
     const banners = ps.banners.filter((t) => t >= t0 && t <= t1).map((t) => t - t0);
     const winSec = (t1 - t0) / 1000;
+    const framesInWin = (ps.frames ? ps.frames.count - (ps.frames.count0 || 0) : 0);
+    const avgFps = winSec > 0 ? framesInWin / winSec : 0;
+    const maxGap = ps.frames ? Math.round(ps.frames.maxGap) : -1;
+    const finished = !!(ps.doneAt && ps.doneAt > t0);
+    const valid = finished && avgFps >= 50 && maxGap < 250;
     console.log(
       speed + '×   | ' + spikes.length + ' | ' + banners.length + ' | ' +
       winSec.toFixed(1) + ' | ' + (spikes.length / winSec).toFixed(2) + ' | ' +
       maxInWindow(spikes) + ' | ' + maxInWindow(banners) +
-      (ps.doneAt && ps.doneAt > t0 ? '  (full ride)' : '  (WINDOW ELAPSED — ride unfinished)')
+      '  [' + (finished ? 'full ride' : 'WINDOW ELAPSED — ride unfinished') +
+      '; pacing ' + avgFps.toFixed(0) + ' fps, max frame gap ' + maxGap + ' ms; ' +
+      (valid ? 'PACING-VALID' : 'PACING-INVALID') + ']'
     );
   }
   fs.rmSync(dir, { recursive: true, force: true });
