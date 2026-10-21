@@ -10,7 +10,7 @@
  * bundle in real headless Chromium 152 (the same engine family as
  * the Android WebView the game ships in) at a phone viewport
  * (412×915 CSS px, DPR 2), real time, on the sustained worst case
- * (eth-defi, 92 ATH / 610 candles — the most ATH-dense ride in the
+ * (eth-defi, 93 ATH / 610 candles — the most ATH-dense ride in the
  * shipped datasets).
  *
  * Frame pacing note: onset RATES in this bundle are not

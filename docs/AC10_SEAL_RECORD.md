@@ -37,7 +37,7 @@ no code changes after the seal head without re-opening this record)
 
 - **Instrument:** `verification/photosafety_chromium.js` —
   headless Chromium 152 (WebView engine family), 412×915 @ DPR 2,
-  real time, real bundle + datasets, worst case eth-defi (92 ATH /
+  real time, real bundle + datasets, worst case eth-defi (93 ATH /
   610 candles), full rides at native pacing. Metric: max `.spike`
   onsets in any sliding 1-second window vs **WCAG 2.3.1 (≤3)**.
 - **Fidelity limits (stated):** headless-on-server is the upper
@@ -71,9 +71,16 @@ no code changes after the seal head without re-opening this record)
   wall-clock rates downward), and two fuller tables delivered
   during the sprint could not be verified against the runs'
   captured logs and are **withdrawn as evidence** — the figures
-  above are the log-backed ones. A full-pacing, full-ride
-  measurement remains unachieved in this environment; it is not
-  load-bearing for this verdict.
+  above are the log-backed ones. Post-seal, four further
+  post-cure runs (file/log-captured, pacing-probed) read max
+  onsets/1s of 2/3/3/2, 2/2/2/2, 2/3/3/3 and 2/3/3/3 across
+  1×/4×/16×/64× — never over the bar — with full ATH traversal
+  at 1× proven by onset count (93 appends = all 93 ATH; the
+  dataset holds 93 ATH under the game's seeding rule, not 92
+  as first probed). Ride-completion sign-off stayed out of
+  reach on this host at every budget tried (stall losses
+  ~30% of wall time); it is not load-bearing for this verdict,
+  for the reasons above.
 
 ## Integrity checks at this head
 

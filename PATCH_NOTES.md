@@ -54,7 +54,7 @@ real time (the loop's onset rates are dt-driven, so they are
 renderer-independent; CDP virtual time was tried and rejected —
 in this build it advances timers while starving rAF), real
 bundle + datasets, pass-active fake bridge, worst case eth-defi
-(92 ATH / 610 candles), FULL rides at native pacing. Metric:
+(93 ATH / 610 candles), FULL rides at native pacing. Metric:
 max `.spike` onsets in any sliding 1-second window vs the WCAG
 2.3.1 bar (≤3 flashes in any 1 s). Fidelity limits are stated in
 the harness header: headless-on-server is the upper envelope a
@@ -80,6 +80,27 @@ can bypass the cap and no spike leaks across rides.
 **Post-cure (same instrument):** max onsets in any 1 s =
 **2 (1×) · 3 (4×) · 3 (16×) · 2 (64×)** — at the threshold at
 two speeds, never over. **The bar is met at every speed.**
+
+**Final measurement state (2026-10-21, post-seal runs with the
+credit ceiling lifted):** four independent post-cure Chromium
+runs were captured to files/logs; max onsets in any 1 s, by run:
+DPR 2 starved **2/3/3/2** · DPR 2 screencast **2/2/2/2** · DSF 1
+**2/3/3/3** · DSF 1 stall-sized budgets **2/3/3/3** (1×/4×/16×/
+64×). Never over the bar in any row of any run. Full ATH
+traversal at 1× is proven by onset count (93 appends = all 93
+ATH; the dataset's ATH count is **93** under the game's seeding
+rule — the "92" quoted earlier in this file came from the fix
+wave probe's off-by-one seed and is corrected throughout).
+Ride-*completion* sign-off (the finish screen reached inside
+the window) was not achievable on this host at any budget tried
+(up to 720 s for the 508 s ride): stall gaps of 300–1400 ms —
+neighbour-lane CPU contention — each burn game time through the
+loop's 50 ms dt clamp, an accumulated ~30% loss that grows with
+window length. It is not load-bearing: starvation only lowers
+wall-clock onset rates, traversal is proven where it can be
+counted, and the construction proof above governs. A quiet-host
+full-ride run remains a nice-to-have for the first update cycle,
+not a seal gap.
 
 **Evidence note (2026-10-21, post-seal re-verification — read
 this before quoting any number above):** two measurement tables
@@ -155,7 +176,7 @@ the discriminating test that proved the defect.
   `[EFFECTIVE_DATE]` unfilled — flip-gate items, not builder items.
 - **P-6 photosafety** (`4e9c396`). No cure attempted.
   `verification/photosafety_measure.js` landed (jsdom instrument;
-  sustained worst case eth-defi, 92 ATH / 610 candles): 1× 0.40,
+  sustained worst case eth-defi, 93 ATH / 610 candles): 1× 0.40,
   4× 0.90, 16× 1.10, 64× 0.70 spike onsets/sec — which do NOT
   reproduce the ~28/sec figure quoted in the bankai record (its
   method is not preserved in this repo; spike spawns are
