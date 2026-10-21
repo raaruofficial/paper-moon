@@ -110,10 +110,19 @@ function bannerHeld(){var r=state.ride;return !!(r&&r.paused)||paperOverRide()}
 function holdBanner(){var b=$('#banner');if(b._done&&b._tm){clearTimeout(b._tm);b._tm=0;b._remain=Math.max(0,(b._remain||2300)-(performance.now()-(b._shownAt||performance.now())))}}
 /* releaseBanner re-arms the in-flight banner's held timer. It must never fire while the banner is held (bannerHeld: ride paused, or paper over the ride): a held banner is invisible, so completing it unseen silently drops a catalyst (RV-6c). Callers: resume clears its hold first, then calls plainly; paper-close clears the paper first (a pause hold still standing makes this a no-op, and resume releases later); finish passes force=true and clears r.paused — the ride is over, so pause can no longer hold the finale drain. */
 function releaseBanner(force){var b=$('#banner');if(!force&&bannerHeld())return;if(b._done&&!b._tm){b._shownAt=performance.now();b._tm=setTimeout(bannerDone,b._remain||0)}}
-var spikeWin=null;
-function clearSpikeWin(){if(spikeWin){clearTimeout(spikeWin.tm);spikeWin=null}}
-function athSpike(p){var r=state.ride;if(r&&r.speed>=16){if(!spikeWin){spikeWin={max:p,ride:r};spikeWin.tm=setTimeout(flushSpike,350)}else if(p>spikeWin.max)spikeWin.max=p;return}spawnSpike(p)}
-function flushSpike(){if(!spikeWin)return;var w=spikeWin;spikeWin=null;if(state.ride===w.ride&&state.screen==='ride')spawnSpike(w.max)}
+/* P-6 photosafety gate (AC-10 cure): every spike onset passes one
+   rate gate — a 500 ms minimum interval between onsets at ALL
+   speeds, coalescing bursts to the highest price in the window.
+   The pre-cure path spawned per ATH candle below 16x and coalesced
+   only at >=16x (350 ms), which still leaked 4-5 onsets into some
+   1-second windows at speed. A 500 ms floor caps any 1-second
+   window at 3 onsets by construction (WCAG 2.3.1 three-flash
+   threshold), with the cap enforced at the single spawn choke
+   point so no caller can bypass it. */
+var spikeGate={last:0,pend:null,tm:0};
+function clearSpikeWin(){spikeGate.pend=null;if(spikeGate.tm){clearTimeout(spikeGate.tm);spikeGate.tm=0}}
+function athSpike(p){var now=performance.now();var wait=500-(now-spikeGate.last);if(wait>0){if(!spikeGate.pend||p>spikeGate.pend.p)spikeGate.pend={p:p,ride:state.ride};if(!spikeGate.tm)spikeGate.tm=setTimeout(flushSpike,wait);return}spikeGate.last=now;spawnSpike(p)}
+function flushSpike(){spikeGate.tm=0;var w=spikeGate.pend;spikeGate.pend=null;if(!w)return;if(state.ride===w.ride&&state.screen==='ride'){spikeGate.last=performance.now();spawnSpike(w.p)}}
 function spawnSpike(p){var d=document.createElement('div');d.className='spike';d.innerHTML='<span>NEW ATH</span><b>'+price(p)+'</b>';document.body.appendChild(d);setTimeout(function(){d.remove()},900);tone(760,.2,'triangle')}
 function renderSpeeds(){$('#speeds').innerHTML=[1,4,16,64].map(function(v){return'<button class="speed-btn '+(state.ride.speed===v?'active':'')+'" data-speed="'+v+'">'+v+'×</button>'}).join('');$$('[data-speed]').forEach(function(b){b.onclick=function(){state.ride.speed=+b.dataset.speed;renderSpeeds();tone(260+state.ride.speed*4,.08)}})}
 function updateTicker(){var r=state.ride;if(!r)return;var latest=r.printed[r.printed.length-1];$('#tickerText').textContent=r.c.mystery?(r.printed.length+' CLASSIFIED DISPATCHES PRINTED'):(latest?latest.headline:'THE PRESSES ARE QUIET')}
