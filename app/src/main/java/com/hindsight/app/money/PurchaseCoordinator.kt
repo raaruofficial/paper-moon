@@ -16,8 +16,10 @@ data class PurchaseSheetData(
     val recipientDisplay: String
 ) {
     companion object {
-        /** The sheet for the current config, or null while the rail is
-         *  closed (an unconfigured rail renders no sheet at all). */
+        /** The sheet data for the current config, or null when no
+         *  receiving wallet is configured. This is data only: while
+         *  the rail is closed (sales not enabled), the coordinator
+         *  refuses at intent, before this sheet can be confirmed. */
         fun forDayPass(
             receivingWalletProvider: () -> String? =
                 { ReceivingWalletConfig.configuredReceivingWallet }

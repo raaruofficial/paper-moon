@@ -65,12 +65,16 @@ object MoneyConfig {
  * Custody: ~/workspace/receiving-wallets/ (keys sealed 0600, encrypted
  * backup bundle restore-proven at creation).
  *
- * Configuring the address does NOT open sales: this line's rail opens
- * only at the AC-10 seal + flip gates. In any build where this value
- * were blank, [configuredReceivingWallet] is null, [railOpen] is
- * false, and every purchase attempt is refused before any sheet,
- * transaction, or charge can happen — visibly (a named refusal the
- * UI surfaces) and safely (no other recipient is ever substituted).
+ * Configuring the address does NOT open sales. Configuration and
+ * enablement are two separate facts, and [railOpen] requires both:
+ * the wallet is configured (where a payment would go) AND sales are
+ * enabled ([SALES_ENABLED] — whether a payment may happen at all).
+ * This line is configured but NOT enabled: every purchase attempt is
+ * refused before any sheet, transaction, or charge can happen —
+ * visibly (a named refusal the UI surfaces) and safely (no other
+ * recipient is ever substituted). In any build where the value below
+ * were blank, [configuredReceivingWallet] is null and the rail is
+ * closed on the configuration leg alone.
  */
 object ReceivingWalletConfig {
     /**
@@ -88,9 +92,27 @@ object ReceivingWalletConfig {
             }.getOrDefault(false)
         }
 
-    /** True only when a valid dedicated receiving wallet is configured. */
+    /**
+     * Sales enablement — the flip. Deliberately a separate fact from
+     * configuration: the address above says where a payment would
+     * go; this says whether sales may happen at all. FALSE on this
+     * line. It flips only in the AC-10 seal + flip act (its own
+     * commit, after the seal re-audit and the flip gates), never as
+     * a side effect of configuring the wallet.
+     *
+     * (Bankai #3 MAJOR-1: at aba6b30 [railOpen] derived from
+     * configuration alone, so setting the address silently opened
+     * the rail in code and a purchase-capable CI artefact existed.
+     * Configuration is not authorization.)
+     */
+    private const val SALES_ENABLED: Boolean = false
+
+    /**
+     * True only when sales are enabled AND a valid dedicated
+     * receiving wallet is configured. Either fact alone is closed.
+     */
     val railOpen: Boolean
-        get() = configuredReceivingWallet != null
+        get() = SALES_ENABLED && configuredReceivingWallet != null
 
     /** Named refusal surfaced when the rail is attempted while closed. */
     const val RAIL_CLOSED_MESSAGE: String =

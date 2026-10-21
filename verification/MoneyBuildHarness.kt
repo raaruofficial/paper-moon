@@ -51,13 +51,29 @@ fun main() {
     println("== GATE: dedicated receiving wallet + fail-closed mechanics (pre-join mitigation) ==")
     // Decided state (2026-10-20, TRACE pre-join decision under owner
     // delegation): the dedicated PAPER MOON receiving wallet exists and
-    // is configured. Sales opening remains gated by AC-10 + flip; the
-    // fail-closed mechanics below are proven against INJECTED
+    // is configured. Configuration is NOT enablement (bankai #3
+    // MAJOR-1): at this head sales are not enabled, so the production
+    // rail is closed even though the wallet is configured, and the
+    // production-default flow/coordinator refuse. The fail-closed
+    // mechanics below are additionally proven against INJECTED
     // unconfigured/closed providers — the state any build without the
     // decided wallet must refuse in.
     check("GATE configured wallet is the dedicated PM receiving wallet",
         ReceivingWalletConfig.configuredReceivingWallet == "41FFd2wK8Uoy75TVYDx6bXZzscPH3UihwpuiX8fAtQYe")
     check("GATE configured wallet is never the shared treasury", ReceivingWalletConfig.configuredReceivingWallet != SHARED_TREASURY)
+    check("GATE configured does NOT open the rail (sales not enabled at this head)",
+        !ReceivingWalletConfig.railOpen)
+    run {
+        val productionFlow = PurchaseFlow(InMemorySecureStore())
+        check("GATE production-default flow refuses beginIntent while sales disabled",
+            productionFlow.beginIntent(MoneyConfig.ITEM_DAY_PASS) is PurchaseFlow.BeginResult.RailClosed)
+        val productionCoord = PurchaseCoordinator(productionFlow, EntitlementLedger(InMemorySecureStore()),
+            SettlementVerifier(FakeChain(null)) { TEST_RECIPIENT }, FixedBlockhash(),
+            CountingSender(SendOutcome.Sent("s")), object : SheetConfirmer {
+                override fun confirm(sheet: PurchaseSheetData) = true }) { TEST_RECIPIENT }
+        check("GATE production-gated coordinator refuses even with a recipient injected",
+            productionCoord.purchase(MoneyConfig.ITEM_DAY_PASS, Base58.encode(ByteArray(32) { 3 })) is PurchaseResult.RailClosed)
+    }
     run {
         val flow = PurchaseFlow(InMemorySecureStore(), railOpenProvider = { false })
         check("GATE beginIntent refuses (RailClosed)", flow.beginIntent(MoneyConfig.ITEM_DAY_PASS) is PurchaseFlow.BeginResult.RailClosed)
