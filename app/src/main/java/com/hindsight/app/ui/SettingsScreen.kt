@@ -50,7 +50,7 @@ fun SettingsScreen(navController: NavController) {
             Text("About", style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.height(8.dp))
             Text(
-                "PAPER MOON — a crypto time-travel arcade for the Solana Seeker.\nPaper money. Real charts. The moon you missed.\nThree rookie rides free per signed-in wallet (one claim, ever), then a day pass: $3.50 USDC for 24 hours of unlimited rides. Day-pass sales open only when the publisher enables the receiving wallet — while sales are closed, nothing can be charged. Riding uses $1,000 of paper money: no deposits, stakes, winnings, or withdrawals. All sales are final. Non-custodial: your keys never leave the Seed Vault.",
+                "PAPER MOON — a crypto time-travel arcade for the Solana Seeker.\nPaper money. Real charts. The moon you missed.\nThree rookie rides free per signed-in wallet (one claim, ever), then a day pass: ${com.hindsight.app.money.MoneyConfig.priceUsdDisplay()} USDC for 24 hours of unlimited rides. Day-pass sales open only when the publisher enables the receiving wallet — while sales are closed, nothing can be charged. Riding uses $1,000 of paper money: no deposits, stakes, winnings, or withdrawals. All sales are final. Non-custodial: your keys never leave the Seed Vault.",
                 fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

@@ -53,7 +53,7 @@ fun HomeScreen(navController: NavController) {
         )
         Spacer(Modifier.height(4.dp))
         Text(
-            text = "3 rookie rides free per wallet · day pass $3.50 USDC / 24h",
+            text = "3 rookie rides free per wallet · day pass ${com.hindsight.app.money.MoneyConfig.priceUsdDisplay()} USDC / 24h",
             fontSize = 11.sp,
             letterSpacing = 2.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
