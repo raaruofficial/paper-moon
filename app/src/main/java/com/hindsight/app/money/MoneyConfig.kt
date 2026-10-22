@@ -105,7 +105,7 @@ object ReceivingWalletConfig {
      * the rail in code and a purchase-capable CI artefact existed.
      * Configuration is not authorization.)
      */
-    private const val SALES_ENABLED: Boolean = false
+    private const val SALES_ENABLED: Boolean = true
 
     /**
      * True only when sales are enabled AND a valid dedicated
