@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.hindsight.app"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.hindsight.app"
@@ -113,6 +113,12 @@ dependencies {
         exclude(group = "androidx.test.services")
         exclude(group = "junit")
     }
+
+    // Seeker Connect (v0.2.9 proof build — SEEKER_CONNECT_BRIEF §2.3).
+    // Core + Compose artifacts; dependency edge UNPROVEN until this
+    // branch's CI resolution is filed in the build record.
+    implementation("com.solanamobile:seeker-connect:0.2.0")
+    implementation("com.solanamobile:seeker-connect-compose:0.2.0")
 
     // AC-02: Keystore-backed EncryptedSharedPreferences for the MWA
     // auth token, entitlement cache, receipts, and claim ledger.
