@@ -39,6 +39,15 @@ import org.json.JSONObject
  *    what the shell's ledger holds; the page can display it and can
  *    never assert it (AC-05). The rookie grant is claimed/consumed
  *    through the shell ([claimRookie] / [consumeRookieRide], AC-07).
+ *  - First-launch playability (v0.2.4): assembling this bridge
+ *    ensures the shell's device-local rookie allowance (see the
+ *    RookieLedger class doc), so a fresh install — no wallet, no
+ *    sign-in, no network — can play its rookie rides from first
+ *    open. The pre-fix build reported 0 unbound rookie rides, so
+ *    every ride gated behind the sign-in ceremony and a wallet-less
+ *    reviewer could play nothing (the "became unusable" rejection).
+ *    Purchases still require the bound identity exactly as before;
+ *    only PLAY of the free grant is unbound.
  *
  * Calling convention (async methods): call with a unique requestId,
  * get an ack, and receive the result via
@@ -49,11 +58,38 @@ import org.json.JSONObject
 class PaperMoonWalletBridge(
     private val activity: ComponentActivity,
     private val walletManager: WalletManager,
+    /**
+     * The activity's single MWA sender, created by MainActivity in
+     * onCreate (v0.2.5 crash fix). This bridge used to construct its
+     * own `ActivityResultSender(activity)` as a property initializer;
+     * the bridge is assembled during composition, when the activity
+     * is RESUMED, and the sender's constructor registers an
+     * activity-result launcher — which AndroidX forbids at or after
+     * STARTED, so every PLAY press threw IllegalStateException
+     * (BUTTON_CRASH_DIAGNOSIS.md). The sender is now constructor-
+     * injected from the activity's pre-STARTED lifecycle and only
+     * ever *used* here, never constructed.
+     */
+    private val sender: ActivityResultSender,
     private val evaluateJs: (script: String) -> Unit
 ) {
     private val app = activity.applicationContext as PaperMoonApp
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private val sender = ActivityResultSender(activity)
+
+    init {
+        // v0.2.4 first-launch playability: the game reaches the shell
+        // only through this bridge, so assembling it is the one
+        // moment guaranteed to precede every game call — including
+        // the page's boot-time entitlement read. Ensure the
+        // device-local rookie allowance exists before the page
+        // loads: a fresh install then reads 3 playable rookie rides
+        // from its first getEntitlement(), and no wallet ceremony
+        // stands between a new user and the free rides. Idempotent
+        // (an existing allowance returns unchanged, never renewed);
+        // a failed write grants nothing — the ledger fails closed
+        // and the entitlement simply reports 0, as before the fix.
+        app.rookieLedger.ensureLocalGrant()
+    }
 
     // ------------------------------------------------------------------
     // Synchronous getters (safe to call any time)
@@ -94,7 +130,12 @@ class PaperMoonWalletBridge(
     /**
      * What the shell's ledger says this user holds (AC-05 item 5:
      * the visible entitlement state). Read-only; the page cannot
-     * write any of this. `rookieRemaining` is 0 until claimed.
+     * write any of this. The rookie fields report the ACTIVE scope
+     * (v0.2.4): the bound identity's grant when an identity is
+     * bound (0 until that identity claims, as AC-07 always held),
+     * the device-local allowance when none is — so a fresh, unbound
+     * install reads its 3 local rides here instead of the pre-fix 0
+     * that gated all play behind sign-in.
      */
     @JavascriptInterface
     fun getEntitlement(): String {
@@ -105,8 +146,16 @@ class PaperMoonWalletBridge(
             .put("passActive", entitlement.passActive)
             .put("passExpiresAtMs", entitlement.passExpiresAtMs)
             .put("pending", entitlement.pendingSignature != null)
-            .put("rookieClaimed", identity != null && app.rookieLedger.hasClaimed(identity))
-            .put("rookieRemaining", if (identity != null) app.rookieLedger.remainingFor(identity) else 0)
+            .put(
+                "rookieClaimed",
+                if (identity != null) app.rookieLedger.hasClaimed(identity)
+                else app.rookieLedger.hasLocalGrant()
+            )
+            .put(
+                "rookieRemaining",
+                if (identity != null) app.rookieLedger.remainingFor(identity)
+                else app.rookieLedger.localRemaining()
+            )
             .toString()
     }
 
@@ -168,6 +217,8 @@ class PaperMoonWalletBridge(
     /**
      * Claim the identity-bound rookie grant (AC-07). Exactly once per
      * bound identity; re-claims return the existing remaining count.
+     * The device-local allowance is a separate scope and is never
+     * claimed here: an unbound call still resolves `not_bound`.
      */
     @JavascriptInterface
     fun claimRookie(requestId: String): String {
@@ -192,16 +243,25 @@ class PaperMoonWalletBridge(
      * Consume one rookie ride. The bundle calls this ONLY after a
      * ride has been successfully built (AC-08 item 3:
      * decrement-after-build). Resolves the remaining count.
+     *
+     * The ride is charged to the ACTIVE scope (v0.2.4): the bound
+     * identity's grant when an identity is bound, the device-local
+     * allowance when none is — an unbound player spending a free
+     * ride is the normal first-launch path, not an error. Only an
+     * exhausted active scope resolves `no_rookie_rides`. (Purchases
+     * are unchanged: [requestPurchase] with no bound identity still
+     * resolves `not_bound` — buying is bound-only, playing the free
+     * rides is not.)
      */
     @JavascriptInterface
     fun consumeRookieRide(requestId: String): String {
         val identity = app.shellVerifier.boundIdentity
-        if (identity == null) {
-            scope.launch { resolveErr(requestId, "not_bound") }
-            return ack(requestId)
-        }
         scope.launch {
-            val remaining = app.rookieLedger.consumeOne(identity)
+            val remaining = if (identity != null) {
+                app.rookieLedger.consumeOne(identity)
+            } else {
+                app.rookieLedger.consumeLocalOne()
+            }
             if (remaining >= 0) {
                 resolveOk(requestId, JSONObject().put("rookieRemaining", remaining))
                 postEntitlementChanged()

@@ -6,7 +6,9 @@ Paper money. Real charts. The moon you missed.
 Pick one of 35 historical runs (BTC, ETH, DOGE, SHIB, WIF, PEPE, TRUMP, BONK,
 PNUT, and more — plus REKT scenarios like LUNA). Every ride stakes a flat
 $1,000 paper pot on the real candles, with position sizing (25-100%),
-1x/2x/3x leverage, take-profit and stop-loss orders, and time compression.
+take-profit and stop-loss orders, and time compression. Rides run at
+1x — no leverage (owner ruling O-1, 2026-10-27; the selector and its
+mechanics were removed in v0.2.5).
 Three rookie rides per session, then a simulated coin insert (25 cents a
 play) or a simulated $5 session pass — this build charges nothing. SIMULATED FUNDS — real historical prices, paper money.
 

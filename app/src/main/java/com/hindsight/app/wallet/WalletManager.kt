@@ -119,7 +119,9 @@ class WalletManager(
 
     /**
      * Connect to a wallet. Launches the MWA association intent via [sender]
-     * (pass `ActivityResultSender(activity)` from the calling Activity).
+     * (the calling Activity's single sender, created in its onCreate —
+     * never construct an ActivityResultSender at call time or during
+     * composition; registration is only legal before STARTED).
      * Returns the wallet's Base58 public key on success.
      */
     suspend fun connect(sender: ActivityResultSender): Result<String> {

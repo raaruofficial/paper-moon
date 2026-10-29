@@ -43,6 +43,7 @@ import androidx.navigation.NavController
 import com.hindsight.app.PaperMoonApp
 import com.hindsight.app.game.GameConfig
 import com.hindsight.app.wallet.PaperMoonWalletBridge
+import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -63,7 +64,7 @@ import kotlinx.coroutines.withContext
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun GameScreen(navController: NavController, onExit: () -> Unit) {
+fun GameScreen(navController: NavController, sender: ActivityResultSender, onExit: () -> Unit) {
     val context = LocalContext.current
     val activity = context as ComponentActivity
     val walletManager = remember { (context.applicationContext as PaperMoonApp).walletManager }
@@ -172,6 +173,12 @@ fun GameScreen(navController: NavController, onExit: () -> Unit) {
                         val bridge = PaperMoonWalletBridge(
                             activity = activity,
                             walletManager = walletManager,
+                            // v0.2.5 crash fix: the activity-owned
+                            // sender (created in MainActivity.onCreate,
+                            // pre-STARTED). The bridge must never
+                            // construct one here — this factory runs
+                            // during composition, at RESUMED.
+                            sender = sender,
                             evaluateJs = { js -> post { evaluateJavascript(js, null) } }
                         )
                         addJavascriptInterface(bridge, GameConfig.BRIDGE_NAME)

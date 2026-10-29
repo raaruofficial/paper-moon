@@ -1,6 +1,5 @@
 package com.hindsight.app.ui
 
-import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -52,10 +51,14 @@ import kotlinx.coroutines.launch
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WalletScreen(navController: NavController) {
+fun WalletScreen(navController: NavController, sender: ActivityResultSender) {
+    // v0.2.5 crash fix: the ActivityResultSender is the activity's
+    // single instance, created in MainActivity.onCreate before the
+    // lifecycle reached STARTED and passed in here. This screen used
+    // to construct its own in a remember{} during composition —
+    // registration at RESUMED threw IllegalStateException and every
+    // WALLET press crashed (BUTTON_CRASH_DIAGNOSIS.md).
     val context = LocalContext.current
-    val activity = context as ComponentActivity
-    val sender = remember { ActivityResultSender(activity) }
     val walletManager = (context.applicationContext as PaperMoonApp).walletManager
     val state by walletManager.uiState.collectAsState()
     val scope = rememberCoroutineScope()

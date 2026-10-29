@@ -34,7 +34,7 @@ fun jdkSign(kp: java.security.KeyPair, msg: ByteArray): ByteArray {
 }
 
 val TEST_RECIPIENT: String = Base58.encode(ByteArray(32) { (it + 7).toByte() })
-const val SHARED_TREASURY = "FRShnxX7vi64gtBoA6JPmH9MBuVqtheEQaxA1D17wKdP" // raaru.skr — must NEVER be the PM recipient
+const val RAARU_SKR_TREASURY = "FRShnxX7vi64gtBoA6JPmH9MBuVqtheEQaxA1D17wKdP" // raaru.skr — owner-ruled PM recipient since 2026-10-21
 
 class FakeChain(var tx: ObservedTransaction?) : ChainReader {
     override fun fetchTransaction(signature: String): ObservedTransaction? = tx
@@ -62,31 +62,27 @@ class PutFailStore(val inner: InMemorySecureStore = InMemorySecureStore()) : Sec
 }
 
 fun main() {
-    println("== GATE: dedicated receiving wallet + fail-closed mechanics (pre-join mitigation) ==")
-    // Decided state (2026-10-20, TRACE pre-join decision under owner
-    // delegation): the dedicated PAPER MOON receiving wallet exists and
-    // is configured. Configuration is NOT enablement (bankai #3
-    // MAJOR-1): at this head sales are not enabled, so the production
-    // rail is closed even though the wallet is configured, and the
-    // production-default flow/coordinator refuse. The fail-closed
-    // mechanics below are additionally proven against INJECTED
-    // unconfigured/closed providers — the state any build without the
-    // decided wallet must refuse in.
-    check("GATE configured wallet is the dedicated PM receiving wallet",
-        ReceivingWalletConfig.configuredReceivingWallet == "41FFd2wK8Uoy75TVYDx6bXZzscPH3UihwpuiX8fAtQYe")
-    check("GATE configured wallet is never the shared treasury", ReceivingWalletConfig.configuredReceivingWallet != SHARED_TREASURY)
-    check("GATE configured does NOT open the rail (sales not enabled at this head)",
-        !ReceivingWalletConfig.railOpen)
+    println("== GATE: owner-ruled receiving wallet (raaru.skr) + fail-closed mechanics ==")
+    // Owner ruling 2026-10-21 (supersedes the TRACE pre-join dedicated-wallet
+    // state): day-pass payments receive directly at raaru.skr, the shared
+    // treasury, and sales are ENABLED. The production rail is therefore OPEN
+    // at this head. Fail-closed mechanics are proven below against INJECTED
+    // unconfigured/closed providers -- the state any build without a
+    // configured wallet must refuse in.
+    check("GATE configured wallet is the owner-ruled recipient (raaru.skr)",
+        ReceivingWalletConfig.configuredReceivingWallet == "FRShnxX7vi64gtBoA6JPmH9MBuVqtheEQaxA1D17wKdP")
+    check("GATE configured wallet equals the raaru.skr treasury by owner ruling", ReceivingWalletConfig.configuredReceivingWallet == RAARU_SKR_TREASURY)
+    check("GATE configured opens the rail (sales enabled by owner ruling)",
+        ReceivingWalletConfig.railOpen)
     run {
         val productionFlow = PurchaseFlow(InMemorySecureStore())
-        check("GATE production-default flow refuses beginIntent while sales disabled",
-            productionFlow.beginIntent(MoneyConfig.ITEM_DAY_PASS) is PurchaseFlow.BeginResult.RailClosed)
-        val productionCoord = PurchaseCoordinator(productionFlow, EntitlementLedger(InMemorySecureStore()),
-            SettlementVerifier(FakeChain(null)) { TEST_RECIPIENT }, FixedBlockhash(),
-            CountingSender(SendOutcome.Sent("s")), object : SheetConfirmer {
-                override fun confirm(sheet: PurchaseSheetData) = true }) { TEST_RECIPIENT }
-        check("GATE production-gated coordinator refuses even with a recipient injected",
-            productionCoord.purchase(MoneyConfig.ITEM_DAY_PASS, Base58.encode(ByteArray(32) { 3 })) is PurchaseResult.RailClosed)
+        check("GATE production-default flow begins intent while sales enabled",
+            productionFlow.beginIntent(MoneyConfig.ITEM_DAY_PASS) is PurchaseFlow.BeginResult.Begun)
+        // Production-coordinator RailClosed check dropped by design (prep
+        // 2026-10-24 option (a)): with the rail open, a coordinator over
+        // FakeChain(null) cannot reach a verified grant, so no honest
+        // RailClosed OR Granted expectation exists on that fixture.
+        // Fail-closed proof lives in the injected-provider block below.
     }
     run {
         val flow = PurchaseFlow(InMemorySecureStore(), railOpenProvider = { false })
@@ -191,7 +187,7 @@ fun main() {
             check("AC-03 tx carries TransferChecked for exactly the single-source price", contains(tx, needle))
             val recipientAta = TransactionBuilder.associatedTokenAddress(Base58.decode(TEST_RECIPIENT), Base58.decode(MoneyConfig.USDC_MINT))!!
             check("AC-03 tx includes recipient ATA (derived from configured wallet)", contains(tx, recipientAta))
-            check("AC-03 tx never names the shared treasury", !contains(tx, Base58.decode(SHARED_TREASURY)))
+            check("AC-03 tx built for injected recipient never names raaru.skr", !contains(tx, Base58.decode(RAARU_SKR_TREASURY)))
         }
     }
 
@@ -290,6 +286,49 @@ fun main() {
             relaunched.remainingFor(idA) == 2)
         relaunched.consumeOne(idA); relaunched.consumeOne(idA)
         check("AC-07 exhausting the grant sticks at 0", relaunched.remainingFor(idA) == 0 && relaunched.consumeOne(idA) == -1)
+    }
+
+    println("== AC-07L: device-local rookie allowance (v0.2.4 cold start) ==")
+    run {
+        // Cold start, no wallet anywhere: a fresh store IS a fresh
+        // install. This block proves the exact state the v0.2.3
+        // build denied its reviewers — the unbound entitlement read
+        // must find the full local grant playable (v0.2.3 read 0
+        // unbound and every ride gated behind connect + sign-in +
+        // claim). The bridge's unbound read/consume paths are thin
+        // compositions of these ledger calls (localRemaining /
+        // consumeLocalOne); the bound paths stay AC-07's, above.
+        val store = InMemorySecureStore()
+        val rookie = RookieLedger(store)
+        check("AC-07L fresh install holds no local grant before assembly", !rookie.hasLocalGrant() && rookie.localRemaining() == 0)
+        check("AC-07L assembly grants the full local allowance", rookie.ensureLocalGrant()?.remaining == MoneyConfig.ROOKIE_RIDES)
+        check("AC-07L unbound cold-start read finds 3 playable rides", rookie.localRemaining() == 3)
+        check("AC-07L re-assembly never renews the allowance", rookie.ensureLocalGrant()?.remaining == 3)
+        check("AC-07L local consume decrements (decrement-after-build)", rookie.consumeLocalOne() == 2)
+        // relaunch: new ledger over the same store — count only moves down
+        val relaunched = RookieLedger(store)
+        check("AC-07L relaunch keeps the spent count", relaunched.localRemaining() == 2)
+        relaunched.consumeLocalOne(); relaunched.consumeLocalOne()
+        check("AC-07L exhausting the local allowance sticks at 0", relaunched.localRemaining() == 0 && relaunched.consumeLocalOne() == -1)
+        // Scope independence: the local allowance is not an identity
+        // grant and never writes one — and an identity's claim is
+        // still its own full set, drawn down only by its own rides.
+        check("AC-07L local grant leaks nothing into an identity scope", relaunched.remainingFor(pubB58) == 0 && !relaunched.hasClaimed(pubB58))
+        check("AC-07L identity claim after local play grants its own full set", relaunched.claim(pubB58)?.remaining == 3 && relaunched.localRemaining() == 0)
+        check("AC-07L identity consume never draws the local scope", relaunched.consumeOne(pubB58) == 2 && relaunched.localRemaining() == 0)
+        // The reserved local key can never be a wallet identity:
+        // identities are Base58 encodings of 32-byte keys, and
+        // Base58's alphabet cannot produce this value (it excludes
+        // both '-' and 'l'), so no decode of it is a 32-byte key.
+        check("AC-07L local scope key is not a possible wallet identity",
+            runCatching { Base58.decode(RookieLedger.LOCAL_GRANT_IDENTITY) }.fold(
+                onSuccess = { it.size != 32 }, onFailure = { true }))
+        // Fail closed: an unrecordable grant reports no rides.
+        val failStore = PutFailStore()
+        failStore.failWhen = { true }
+        val failRookie = RookieLedger(failStore)
+        check("AC-07L unrecordable local grant fails closed (0 rides, nothing granted)",
+            failRookie.ensureLocalGrant() == null && failRookie.localRemaining() == 0 && failRookie.consumeLocalOne() == -1)
     }
 
     println("== FIX WAVE bankai #3 MAJOR-2: settlement-write complex (crash injection) ==")
