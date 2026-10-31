@@ -72,16 +72,15 @@ class WalletManager(
             // domain stands up, the wallet approval presents the
             // publisher-controlled project repo. v0.1.0 pointed this at
             // hindsight.app — a stranger's domain (T1-S04, CATASTROPHIC);
-            // that string must never come back. The icon is an absolute
-            // URL to the launcher artwork hosted in this repo, so it
-            // does not depend on resolving against the identity URI.
-            // The icon URL is pinned to an immutable commit, never a
-            // branch (G-1): a branch-relative URL would let any push
-            // re-face every installed copy's approval screen with no
-            // rebuild or signature in between. RE-PIN AT EVERY SEAL:
-            // point this at the new seal commit's full SHA.
+            // that string must never come back. The icon URI must be
+            // RELATIVE: clientlib 2.0.8 validates iconRelativeUri and
+            // throws before any wallet interaction when it is absolute,
+            // which made every wallet connection fail (KFC-005 — the
+            // WAL-002 rejection of v0.2.8, Ticket 345746509519). The
+            // relative form resolves against the identity URI above,
+            // a publisher-controlled root (WAL002_DIAGNOSIS.md §5).
             identityUri = Uri.parse("https://github.com/raaruofficial/paper-moon"),
-            iconUri = Uri.parse("https://raw.githubusercontent.com/raaruofficial/paper-moon/41bb81ab6e506779d072a7aed1742aacae2bd28d/docs/app-icon-512.png"),
+            iconUri = Uri.parse("favicon.ico"),
             identityName = "Paper Moon"
         )
     )
