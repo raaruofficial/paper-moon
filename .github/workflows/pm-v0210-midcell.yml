@@ -7,8 +7,8 @@ name: PM v0.2.10 mid-session destruction cell (A4/A-F3)
 # source at pinned commit d444aff0, throwaway in-job key.
 #
 # The candidate APK is hash-gated before install: the signed
-# v0.2.10 candidate (Android CI run 41156067405, artifact
-# 13025146200, sha256 c01f5be8...). No predecessor is needed:
+# v0.2.10 candidate (Android CI run 41161272317, artifact
+# 13027630647, sha256 c953607e...). No predecessor is needed:
 # this cell exercises connect sessions on the candidate only.
 # Trigger: push to this verification branch only — never merged
 # into the release line.
@@ -101,10 +101,10 @@ jobs:
       - name: Download candidate artifact (hash-gated)
         env:
           GH_TOKEN: ${{ github.token }}
-          CANDIDATE_SHA256: c01f5be8bb031bc882dda53e69cba44520bfb371283dd20e9cd549f262763e28
+          CANDIDATE_SHA256: c953607e7284dd1457c77a5944ee54955e2c9c32a3d9c13534b1dfed28c29cdb
         run: |
           set -euo pipefail
-          gh api "repos/raaruofficial/paper-moon/actions/artifacts/13025146200/zip" > /tmp/cand.zip
+          gh api "repos/raaruofficial/paper-moon/actions/artifacts/13027630647/zip" > /tmp/cand.zip
           mkdir -p /tmp/cand && unzip -o /tmp/cand.zip -d /tmp/cand
           cp /tmp/cand/app-release.apk "$GITHUB_WORKSPACE/pm-under-test.apk"
           actual="$(sha256sum "$GITHUB_WORKSPACE/pm-under-test.apk" | awk '{print $1}')"
