@@ -260,6 +260,36 @@ Branch `feature/v0210-seeker-connect` from the v0.2.8 source pin
     41156597899) and midcell #1 (run 41157023810) ran against
     candidate #2 — their cell verdicts are fixture/cell
     intelligence for the re-runs, not seal evidence.
+    **Midcell #1 result: MID1 PASS + MID2 PASS, 0 fatals** —
+    the host activity was destroyed by a theme flip with a
+    wallet sheet open; the session resolved sealed, the
+    surface settled CONNECTED, and a further disconnect +
+    connect completed in the same process.
+  - **TEKKADAN cross-audit R3 (2026-10-30, scoped re-audit of
+    71f45e8):** wallet seam — A-N1 CURED, no new bugs (one
+    theoretical disconnect/connect interleaving noted as
+    unreachable under the shipped wiring: disconnect renders
+    only in the Connected branch; recorded as a future
+    hardening note, not a finding). Money — B-N1, B-N2(a),
+    B-N2(c) and the flow-marking residual CURED; freeze PASS;
+    harness independently re-run 182/0. **B-N2(b)
+    CURED-WITH-NEW-ISSUE (latent, LOW-MEDIUM, not reachable on
+    the shipped path):** the null-LVBH proof was a
+    production-wiring property — a purchase-capable
+    coordinator built with a plain BlockhashProvider (no
+    BuildContextSource) would bypass the stamp gate, send,
+    and record a sent payment with a null LVBH. Cure (this
+    head): a MISSING build context now gates the send exactly
+    like a failed stamp — purchase() refuses before the
+    wallet is asked — so the invariant holds by construction;
+    the harness's FixedBlockhash fake now models the
+    production provider shape (implements BuildContextSource),
+    and a new R3-N1 case proves a genuinely context-less
+    provider refuses with no send. **Harness: 183 checks,
+    0 failures.** Candidate #3 (release run 41158028363, from
+    the pre-cure head) is superseded before sealing; the tag
+    moves to this head for candidate #4, the artifact of
+    record.
 
 ## 2026-10-27 — v0.2.8: UI-audit fix pass (bundle + version fields) — THE resubmission candidate
 
