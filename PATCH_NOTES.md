@@ -1,5 +1,43 @@
 # PATCH_NOTES — money-build-v0.2.0
 
+## 2026-10-30 — v0.2.9: WAL-002 cure — the minimal resubmission (versionCode 14)
+
+The Gate 0 sitting (verdict `gate0/JUDGE.md`, 2026-10-30: CONDITIONS,
+Gate 0 CLOSED) ruled the version question: the WAL-002 cure ships
+first as a minimal v0.2.9; the Seeker Connect build renumbers to
+v0.2.10 and carries the verdict's conditions with it.
+
+**This build is the pin plus one line.** Source of record: commit
+`f5bcd16` (the sealed v0.2.8 tree), frozen by annotated tag
+`pin/v0.2.8-source` (read back from origin — R-M9 closed). Onto it,
+exactly (JUDGE C-32):
+
+- `wallet/WalletManager.kt` — `iconUri` becomes the relative
+  `Uri.parse("favicon.ico")`. Nothing else in the construction
+  moves: `identityUri` and `identityName` are byte-identical.
+  Diagnosis of record: `WAL002_DIAGNOSIS.md` — KFC-005 IS WAL-002
+  (Ticket 345746509519): clientlib 2.0.8 validates that the icon URI
+  is relative and throws before any wallet interaction when it is
+  absolute, so in v0.2.8 no wallet connection could ever complete
+  with a wallet present. HAUNT closed the identical fault with
+  exactly this shape (v0.1.13, G3).
+- Version fields: versionCode 14 / versionName 0.2.9.
+
+**Nothing else changed.** The game bundle is byte-identical to
+v0.2.8's; no toolchain movement, no Connect code, no config change
+rides this build.
+
+**C-33 census (pre-seal, read-only):** the tree was censused for the
+KFC-007 restore-getter fault shape (a post-transact restore reading
+the pubkey back from UI state after the Working overwrite). CLEAN:
+both transact flows (`signShellChallenge`,
+`signAndSendTransactions`) capture `priorPublicKey` before the
+Working overwrite and restore only from that captured value (the
+HAVOC-5 cure, in-source); the bridge's remaining getter reads are
+pre-transact identity bindings or plain queries, not restores. The
+build therefore seals as the minimal cure — no second cure stacked,
+nothing shipped around a live fault shape.
+
 ## 2026-10-27 — v0.2.8: UI-audit fix pass (bundle + version fields) — THE resubmission candidate
 
 One build pass carrying the combined findings of the two standing UI
