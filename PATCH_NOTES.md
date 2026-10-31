@@ -192,6 +192,74 @@ Branch `feature/v0210-seeker-connect` from the v0.2.8 source pin
     inspected firsthand: correct and legible at both sizes;
     the app palette is dark by design in both SYSTEM themes
     (dark-only scheme, unchanged from v0.2.8).
+  - **Candidate #2:** tag v0.2.10 at aa16921 → release run
+    41156067405, artifact 13025146200, APK sha256 c01f5be8…;
+    signer lineage identical to the v0.2.3–v0.2.9 line.
+    Gate-vehicle run 41156158841 (mirror of aa16921) produced a
+    classes.dex byte-identical to candidate #2's — mapping
+    pairing PROVEN; graph gate PASS (module sets identical to
+    candidate #1, which passed S-1 against proof 41148451407);
+    manifest element multiset identical to the v0.2.8 baseline
+    (C-15 PASS).
+  - **TEKKADAN cross-audit R2 (2026-10-30, read-only re-audit
+    of the R1 fix diff 9c2dcab..aa16921):** all nine R1
+    findings verified CURED (freeze re-verified byte-identical;
+    harness independently re-run 170/0). Three NEW confirmed
+    issues, all cured in commit 71f45e8:
+    - **B-N1 (MEDIUM, empirically reproduced):** the B-F3
+      transfer extractor matched parsed instructions by type
+      only — a system-program SOL transfer (type "transfer",
+      lamports, no token amount) in the same transaction
+      poisoned extraction to null, stalling no-signature
+      reconciliation for any bundled payment. FIX:
+      scanInstructions now gates on program ==
+      spl-token/spl-token-2022 before the type check; non-token
+      instructions are skipped entirely.
+    - **B-N2 (LOW-MEDIUM, fail-closed wedge):** a stranded
+      record converted with a null LVBH (process death between
+      the first AWAITING_WALLET write and the pre-send stamp)
+      or a null recipient (provider unconfigured at conversion)
+      could never resolve — its buyer was blocked forever.
+      FIX, three parts: (a) purchase() now SEND-GATES on the
+      build-context stamp — if the stamp cannot be made
+      durable the purchase refuses BEFORE the wallet is asked
+      (nothing submitted), so a sent intent always carries its
+      LVBH durably and a null LVBH proves never-sent;
+      (b) the reconciler closes a null-LVBH intent on a
+      CONCLUSIVE no-match scan (an inconclusive scan still
+      leaves it open; a match still wins); (c) launch
+      reconciliation re-stamps a null recipient from the shell
+      provider before reconciling.
+    - **A-N1 (LOW, display-only):** connect()'s cancel-restore
+      used the pre-attempt key snapshot — if cancellation
+      landed after the SDK's establish() had already written
+      the new authorization, the surface showed Disconnected
+      for a live connection. FIX: the finally restores from
+      connectedPublicKey() (the authorization as it stands).
+    - Residuals dispositioned: A-F1's eviction is
+      fire-and-forget (EncryptedPaperMoonStore.remove reports
+      no failure) — a double fault defeating BOTH the put and
+      the remove commit is the only resurrection path left;
+      accepted at LOW, single-fault model fully cured.
+      PurchaseFlow.beginIntent's unchecked persist is
+      neutralized by construction: the send gate means no send
+      can occur without a durable stamped record. The
+      reconciler's 25-signature scan window is unchanged
+      (pre-existing, both audit rounds).
+    - Also cured in the same commit (R2-flagged residual):
+      PurchaseFlow.reconcileOnLaunch's UNKNOWN marking now
+      follows the B-F4 doctrine — a failed marking write
+      reports no conversion and keeps the intent's slot.
+    - Harness: **182 checks, 0 failures** (170 baseline + 12
+      new R2-N1/R2-N2/R2-F4r cases). Census clean; freeze
+      re-verified byte-identical.
+  - **Candidate #2 superseded before sealing** by the R2 fix
+    round; tag v0.2.10 moves to 71f45e8 (+ this record) and the
+    release, gate vehicle, runtime battery and mid-session
+    cell re-run on the new artifact. Battery #2 (run
+    41156597899) and midcell #1 (run 41157023810) ran against
+    candidate #2 — their cell verdicts are fixture/cell
+    intelligence for the re-runs, not seal evidence.
 
 ## 2026-10-27 — v0.2.8: UI-audit fix pass (bundle + version fields) — THE resubmission candidate
 
