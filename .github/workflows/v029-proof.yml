@@ -1,0 +1,196 @@
+name: v029 Seeker Connect proof (§2.3)
+
+# §2.3 dependency-proof workflow (Gate 0, ARCHITECT §2.2). Deliberately a
+# SEPARATE file from android.yml: the proof must not perturb the sealed
+# release route. Produces release-shaped evidence only — the
+# assembleRelease below runs with NO keystore environment and yields the
+# debug-key/unsigned fallback build. It is a proof artifact, NEVER a
+# candidate.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to check out and prove"
+        required: true
+        default: "proof/v029-toolchain"
+  push:
+    branches: ["proof/**"]
+
+jobs:
+  proof:
+    name: §2.3 dependency proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out target ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      # The android-36 pair is the §2.2 pin (AGP 8.9.1's build-tools line).
+      # The android-35 pair exists so the SAME workflow can build the
+      # sealed baseline (pin, AGP 8.7.3 / compileSdk 35) for §2.3 step 5's
+      # baseline capture; it does not affect the proof build's inputs.
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-36 build-tools;36.0.0 platforms;android-35 build-tools;35.0.0"
+
+      - name: Record environment
+        run: |
+          mkdir -p proof-evidence
+          {
+            echo "workflow: v029-proof.yml"
+            echo "dispatch-ref-input: ${{ inputs.ref }}"
+            echo "github-ref: ${{ github.ref }}"
+            echo "checked-out-sha: $(git rev-parse HEAD)"
+            echo "runner-image: ${ImageOS:-unknown} / ${ImageVersion:-unknown}"
+            uname -a
+            java -version
+            gradle --version
+            echo "--- installed SDK packages ---"
+            ls "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools"
+          } 2>&1 | tee proof-evidence/environment.txt
+
+      - name: Resolved graph — releaseRuntimeClasspath (§2.3 step 1)
+        run: gradle :app:dependencies --configuration releaseRuntimeClasspath 2>&1 | tee proof-evidence/deps-releaseRuntime.txt
+
+      - name: Resolved graph — releaseCompileClasspath (§2.3 step 1)
+        run: gradle :app:dependencies --configuration releaseCompileClasspath 2>&1 | tee proof-evidence/deps-releaseCompile.txt
+
+      - name: dependencyInsight — seeker-connect (runtime)
+        run: gradle :app:dependencyInsight --configuration releaseRuntimeClasspath --dependency com.solanamobile:seeker-connect 2>&1 | tee proof-evidence/insight-seeker-connect-runtime.txt
+
+      - name: dependencyInsight — seeker-connect-compose (runtime)
+        run: gradle :app:dependencyInsight --configuration releaseRuntimeClasspath --dependency com.solanamobile:seeker-connect-compose 2>&1 | tee proof-evidence/insight-seeker-connect-compose-runtime.txt
+
+      - name: dependencyInsight — clientlib-ktx (runtime)
+        run: gradle :app:dependencyInsight --configuration releaseRuntimeClasspath --dependency com.solanamobile:mobile-wallet-adapter-clientlib-ktx 2>&1 | tee proof-evidence/insight-clientlib-runtime.txt
+
+      - name: dependencyInsight — kotlin-stdlib (runtime, CFG-03 attribution)
+        run: gradle :app:dependencyInsight --configuration releaseRuntimeClasspath --dependency org.jetbrains.kotlin:kotlin-stdlib 2>&1 | tee proof-evidence/insight-kotlin-stdlib-runtime.txt
+
+      - name: dependencyInsight — kotlinx-coroutines-android (runtime, CFG-03 attribution)
+        run: gradle :app:dependencyInsight --configuration releaseRuntimeClasspath --dependency org.jetbrains.kotlinx:kotlinx-coroutines-android 2>&1 | tee proof-evidence/insight-coroutines-runtime.txt
+
+      - name: dependencyInsight — seeker-connect (compile)
+        run: gradle :app:dependencyInsight --configuration releaseCompileClasspath --dependency com.solanamobile:seeker-connect 2>&1 | tee proof-evidence/insight-seeker-connect-compile.txt
+
+      - name: dependencyInsight — seeker-connect-compose (compile)
+        run: gradle :app:dependencyInsight --configuration releaseCompileClasspath --dependency com.solanamobile:seeker-connect-compose 2>&1 | tee proof-evidence/insight-seeker-connect-compose-compile.txt
+
+      - name: dependencyInsight — clientlib-ktx (compile)
+        run: gradle :app:dependencyInsight --configuration releaseCompileClasspath --dependency com.solanamobile:mobile-wallet-adapter-clientlib-ktx 2>&1 | tee proof-evidence/insight-clientlib-compile.txt
+
+      # NO keystore environment on purpose: per app/build.gradle.kts this
+      # yields the debug-key/unsigned fallback build. PROOF ARTIFACT ONLY.
+      - name: assembleRelease (proof artifact, never a candidate)
+        run: gradle :app:assembleRelease --stacktrace 2>&1 | tee proof-evidence/assembleRelease.log
+
+      - name: Harvest mapping + APK (v0210 gate extension)
+        if: always()
+        run: |
+          mkdir -p proof-evidence/build-outputs
+          cp app/build/outputs/mapping/release/mapping.txt proof-evidence/build-outputs/mapping.txt 2>/dev/null || echo "mapping missing" 
+          cp app/build/outputs/apk/release/*.apk proof-evidence/build-outputs/ 2>/dev/null || echo "apk missing"
+          ls -la proof-evidence/build-outputs/ || true
+
+      - name: Harvest evidence (§2.3 steps 2–3)
+        if: always()
+        run: |
+          set -u
+          EV=proof-evidence
+          mkdir -p "$EV/pom" "$EV/module" "$EV/aar"
+          CACHE="$HOME/.gradle/caches/modules-2/files-2.1/com.solanamobile"
+          echo "--- Gradle cache com.solanamobile tree ---" | tee "$EV/cache-tree.txt"
+          find "$CACHE" -type f 2>/dev/null | sort | tee -a "$EV/cache-tree.txt" || true
+          for art in seeker-connect seeker-connect-compose; do
+            find "$CACHE/$art" -name "*.pom"    -exec cp -v {} "$EV/pom/$art.pom" \;       2>/dev/null || true
+            find "$CACHE/$art" -name "*.module" -exec cp -v {} "$EV/module/$art.module" \; 2>/dev/null || true
+            find "$CACHE/$art" -name "*.aar"    -exec cp -v {} "$EV/aar/$art.aar" \;       2>/dev/null || true
+          done
+          # AAR census per artifact: listing, manifest, consumer rules,
+          # classes.jar package histogram + clientlib shading count.
+          for aar in "$EV"/aar/*.aar; do
+            [ -e "$aar" ] || continue
+            base="$(basename "$aar" .aar)"
+            unzip -l "$aar" > "$EV/aar/$base-listing.txt" || true
+            work="$(mktemp -d)"
+            unzip -o -q "$aar" -d "$work" || true
+            [ -f "$work/AndroidManifest.xml" ] && cp "$work/AndroidManifest.xml" "$EV/aar/$base-AndroidManifest.xml" || true
+            [ -f "$work/proguard.txt" ] && cp "$work/proguard.txt" "$EV/aar/$base-proguard.txt" || echo "NO proguard.txt in $base" > "$EV/aar/$base-proguard.txt.absent" 
+            [ -f "$work/META-INF/com/android/build/gradle/aar-metadata.properties" ] && cp "$work/META-INF/com/android/build/gradle/aar-metadata.properties" "$EV/aar/$base-aar-metadata.properties" || true
+            AAPT2="$(ls "$ANDROID_HOME"/build-tools/36.0.0/aapt2 2>/dev/null || true)"
+            if [ -n "$AAPT2" ]; then
+              "$AAPT2" dump xmltree "$aar" --file AndroidManifest.xml > "$EV/aar/$base-manifest-xmltree.txt" 2>&1 || echo "aapt2 xmltree failed for $base" >> "$EV/aar/$base-manifest-xmltree.txt"
+            fi
+            if [ -f "$work/classes.jar" ]; then
+              unzip -l "$work/classes.jar" | awk '{print $4}' | grep '\.class$' > "$EV/aar/$base-classes.txt" || true
+              sed 's|/[^/]*\.class$||' "$EV/aar/$base-classes.txt" | sort | uniq -c | sort -rn > "$EV/aar/$base-classes-packages.txt" || true
+              {
+                echo "clientlib class entries (com/solana/mobilewalletadapter/clientlib/**):"
+                grep -c '^com/solana/mobilewalletadapter/clientlib/' "$EV/aar/$base-classes.txt" || true
+                echo "clientlib-ktx class entries (com/solana/mobilewalletadapter/clientlib/ktx — none expected as literal path; counted for completeness):"
+                grep -c 'mobilewalletadapter' "$EV/aar/$base-classes.txt" || true
+                echo "total classes:"
+                wc -l < "$EV/aar/$base-classes.txt" || true
+              } > "$EV/aar/$base-clientlib-count.txt"
+            else
+              echo "NO classes.jar in $base" > "$EV/aar/$base-classes.txt.absent"
+            fi
+            rm -rf "$work"
+          done
+          # Merged manifest + merger report (AAR merge surface).
+          find app/build/intermediates -path '*merged_manifest*' -name 'AndroidManifest.xml' | head -1 | xargs -r cp -v -t "$EV/" || true
+          [ -f "$EV/AndroidManifest.xml" ] && mv "$EV/AndroidManifest.xml" "$EV/merged-manifest-release.xml" || true
+          find app/build/outputs -name 'manifest-merger-*.txt' -exec cp -v {} "$EV/" \; 2>/dev/null || true
+          # R8 mapping + proof APK into the bundle.
+          [ -f app/build/outputs/mapping/release/mapping.txt ] && cp -v app/build/outputs/mapping/release/mapping.txt "$EV/mapping.txt" || true
+          for apk in app/build/outputs/apk/release/*.apk; do
+            [ -e "$apk" ] || continue
+            cp -v "$apk" "$EV/"
+            sha256sum "$EV/$(basename "$apk")" | tee -a "$EV/proof-apk-sha256.txt"
+          done
+          echo "--- proof-evidence tree ---"
+          find "$EV" -type f | sort
+
+      - name: Record sealed-candidate identity (v0.2.10 candidate #5)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CANDIDATE_ARTIFACT: "13027630647"
+        run: |
+          set -u
+          mkdir -p /tmp/cand4 proof-evidence
+          gh api "repos/raaruofficial/paper-moon/actions/artifacts/$CANDIDATE_ARTIFACT/zip" > /tmp/cand4/c.zip
+          unzip -o /tmp/cand4/c.zip -d /tmp/cand4
+          APK=/tmp/cand4/app-release.apk
+          {
+            echo "candidate: v0.2.10 #5 (release run 41161272317, artifact $CANDIDATE_ARTIFACT)"
+            echo "apk sha256: $(sha256sum "$APK" | awk '{print $1}')"
+            echo "apk classes.dex sha256: $(unzip -p "$APK" classes.dex | sha256sum | awk '{print $1}')"
+            echo "--- apksigner verify --print-certs ---"
+            "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$APK" || true
+            echo "--- aapt badging (head) ---"
+            "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | head -5 || true
+          } | tee proof-evidence/candidate5-release.txt
+
+      - name: Upload evidence bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v029-proof-evidence-${{ github.run_id }}
+          path: proof-evidence/
+          retention-days: 90
+          if-no-files-found: warn
