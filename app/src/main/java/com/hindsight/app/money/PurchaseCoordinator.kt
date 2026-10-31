@@ -254,8 +254,9 @@ class PurchaseCoordinator(
         // (the app is backgrounded behind the wallet — exactly
         // when Android may kill it) carries everything launch
         // reconciliation needs to convert and resolve it.
+        var stampFailed = false
         (blockhashProvider as? BuildContextSource)?.lastBuildContext()?.let { buildCtx ->
-            flow.recordOutcome(
+            val stamped = flow.recordOutcome(
                 PurchaseOutcome(
                     key, PurchaseState.AWAITING_WALLET, null, null, "Awaiting wallet.", buyerIdentity,
                     blockhash = buildCtx.blockhashBase58,
@@ -263,6 +264,25 @@ class PurchaseCoordinator(
                     createdAtMs = System.currentTimeMillis()
                 )
             )
+            if (!stamped) stampFailed = true
+        }
+        if (stampFailed) {
+            // The build context could not be made durable, so a
+            // send from here could never be reconciled after
+            // process death (TEKKADAN R2 audit N-2: the stranded
+            // record would carry no LVBH and no certain fate).
+            // Refuse BEFORE the wallet is asked — nothing was
+            // submitted, nothing was charged. The reconciler's
+            // null-LVBH arm rests on this gate: a sent intent
+            // always carries its LVBH durably.
+            val outcome = PurchaseOutcome(
+                key, PurchaseState.FAILED, null,
+                TxErrorClass.RPC_OR_CONFIRMATION_FAILURE,
+                TxErrorClass.RPC_OR_CONFIRMATION_FAILURE.userMessage,
+                buyerIdentity
+            )
+            flow.recordOutcome(outcome)
+            return PurchaseResult.Failed(TxErrorClass.RPC_OR_CONFIRMATION_FAILURE)
         }
         // The send seam must never escape without an outcome
         // (TEKKADAN audit F2): an exception out of the sender —
@@ -507,7 +527,22 @@ class PurchaseCoordinator(
         // non-submission closes the intent, anything else stays
         // open and keeps the guard.
         flow.unresolvedNoSignatureOutcomes().forEach { outcome ->
-            reconcileNoSignature(outcome)
+            // A record whose recipient could not be stamped when
+            // it was created (the shell provider was unconfigured
+            // in that process) must not stay unreconcilable
+            // forever: re-stamp it from the provider now that it
+            // can answer, then reconcile the effective record
+            // (TEKKADAN R2 audit N-2).
+            val effective = if (outcome.recipient == null) {
+                receivingWalletProvider()?.let { recipient ->
+                    val restamped = outcome.copy(recipient = recipient)
+                    flow.recordOutcome(restamped)
+                    restamped
+                } ?: outcome
+            } else {
+                outcome
+            }
+            reconcileNoSignature(effective)
         }
         return ledger.entitlementFor(boundIdentityHint)
     }

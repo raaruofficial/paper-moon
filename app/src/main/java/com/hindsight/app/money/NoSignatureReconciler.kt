@@ -22,7 +22,11 @@ package com.hindsight.app.money
  *    recorded lastValidBlockHeight with no match, the built
  *    transaction can never land — non-submission is PROVEN, and
  *    the coordinator closes the intent FAILED (not-submitted) and
- *    re-opens purchase. The proof requires a CONCLUSIVE scan:
+ *    re-opens purchase. The same close applies when NO validity
+ *    height was recorded: the coordinator's send gate (the
+ *    build-context stamp must persist before the sender runs)
+ *    makes a null LVBH proof the transaction was never handed to
+ *    the wallet at all. Both arms require a CONCLUSIVE scan:
  *    every candidate was definitively evaluated (a final verdict,
  *    or VERIFIED with its transfer details actually read) and
  *    none matched. An inconclusive candidate — an unreadable
@@ -109,9 +113,23 @@ class NoSignatureReconciler(
             }
         }
         if (!scanConclusive) return Result.StillOpen
-        val height = chain.currentBlockHeight()
         val lastValid = outcome.lastValidBlockHeight
-        if (height != null && lastValid != null && height > lastValid) {
+        if (lastValid == null) {
+            // No recorded validity height. Under the send gate in
+            // PurchaseCoordinator.purchase — the build-context
+            // stamp must persist BEFORE the sender runs — a sent
+            // transaction's intent always carries its LVBH, in
+            // the stamp or in the post-send record. A null LVBH
+            // therefore proves the transaction was never handed
+            // to the wallet: no submittable payment exists, and
+            // the conclusive scan above found no match, so
+            // non-submission is established and the intent closes
+            // instead of wedging its buyer forever (TEKKADAN R2
+            // audit N-2).
+            return Result.ExpiredUnmatched
+        }
+        val height = chain.currentBlockHeight()
+        if (height != null && height > lastValid) {
             return Result.ExpiredUnmatched
         }
         return Result.StillOpen

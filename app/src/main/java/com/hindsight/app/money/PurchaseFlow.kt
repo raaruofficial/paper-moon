@@ -237,11 +237,22 @@ class PurchaseFlow(
                     state = PurchaseState.UNKNOWN,
                     message = "Purchase outcome unknown — reconciling against the chain before any new purchase."
                 )
-                persistOutcome(marked)
-                unknown.add(marked)
+                // The marking counts only when it is durable
+                // (TEKKADAN R2 residual, B-F4 doctrine): a failed
+                // write leaves the outcome in its prior state for
+                // the next pass instead of reporting a conversion
+                // that never landed.
+                if (persistOutcome(marked)) {
+                    unknown.add(marked)
+                }
             }
         }
-        inFlight.clear()
+        // Slots clear only for intents whose UNKNOWN marking is
+        // durable. An intent whose marking failed stays in flight
+        // (fail-closed in-process) and stays in its durable prior
+        // state for the next launch's pass.
+        val markedKeys = unknown.map { it.idempotencyKey }.toHashSet()
+        inFlight.values.removeAll(markedKeys)
         return unknown
     }
 

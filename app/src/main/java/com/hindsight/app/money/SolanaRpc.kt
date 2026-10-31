@@ -208,7 +208,19 @@ class SolanaRpcChainReader(
         fun scanInstructions(instructions: JSONArray?) {
             if (instructions == null) return
             for (i in 0 until instructions.length()) {
-                val parsed = instructions.optJSONObject(i)?.optJSONObject("parsed") ?: continue
+                val instruction = instructions.optJSONObject(i) ?: continue
+                // Only token-program instructions can be token
+                // transfers. A system-program SOL transfer shares
+                // the parsed type name "transfer" but carries
+                // lamports and wallet accounts, not a token amount;
+                // counting it here poisoned the whole extraction
+                // to null and stalled reconciliation for any
+                // transaction bundling a SOL leg (TEKKADAN R2
+                // audit N-1). Non-token instructions are skipped
+                // entirely — never transfers, never unresolved.
+                val program = instruction.optString("program")
+                if (program != "spl-token" && program != "spl-token-2022") continue
+                val parsed = instruction.optJSONObject("parsed") ?: continue
                 val type = parsed.optString("type")
                 if (type != "transfer" && type != "transferChecked") continue
                 sawTransfer = true

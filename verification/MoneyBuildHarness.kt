@@ -1236,6 +1236,244 @@ fun main() {
             propagated && forgotten && unbound)
     }
 
+    println("== TEKKADAN AUDIT R2: fix-round regressions (N-1, N-2, F4 residual, 2026-10-30) ==")
+    run {
+        // N-1: a system-program SOL transfer shares the parsed
+        // type name "transfer" — it must not poison token-transfer
+        // extraction for the whole transaction.
+        val reader = SolanaRpcChainReader("http://127.0.0.1:1/unused")
+        val buyer = Base58.encode(ByteArray(32) { 41 })
+        val usdc = MoneyConfig.USDC_MINT
+        fun acctKey(pub: String) = org.json.JSONObject().put("pubkey", pub)
+        fun bal(idx: Int, owner: String, amount: String) = org.json.JSONObject()
+            .put("accountIndex", idx).put("owner", owner).put("mint", usdc)
+            .put("uiTokenAmount", org.json.JSONObject().put("amount", amount))
+        fun tokenChecked(source: String, dest: String, amount: String) = org.json.JSONObject()
+            .put("program", "spl-token")
+            .put(
+                "parsed", org.json.JSONObject().put("type", "transferChecked")
+                    .put(
+                        "info", org.json.JSONObject()
+                            .put("source", source).put("destination", dest).put("mint", usdc)
+                            .put("tokenAmount", org.json.JSONObject().put("amount", amount))
+                    )
+            )
+        fun systemTransfer(source: String, dest: String) = org.json.JSONObject()
+            .put("program", "system")
+            .put(
+                "parsed", org.json.JSONObject().put("type", "transfer")
+                    .put(
+                        "info", org.json.JSONObject()
+                            .put("source", source).put("destination", dest).put("lamports", 5000)
+                    )
+            )
+        fun txResult(
+            instructions: org.json.JSONArray,
+            pre: org.json.JSONArray,
+            post: org.json.JSONArray,
+            inner: org.json.JSONArray = org.json.JSONArray()
+        ): org.json.JSONObject {
+            val keys = org.json.JSONArray().put(acctKey("acctB")).put(acctKey("acctR"))
+            val meta = org.json.JSONObject()
+                .put("err", org.json.JSONObject.NULL)
+                .put("preTokenBalances", pre).put("postTokenBalances", post)
+                .put("innerInstructions", inner)
+            return org.json.JSONObject()
+                .put(
+                    "transaction", org.json.JSONObject()
+                        .put(
+                            "message", org.json.JSONObject()
+                                .put("accountKeys", keys).put("instructions", instructions)
+                        )
+                )
+                .put("meta", meta)
+        }
+        val pre = org.json.JSONArray().put(bal(0, buyer, "7000000")).put(bal(1, TEST_RECIPIENT, "0"))
+        val post = org.json.JSONArray().put(bal(0, buyer, "3500000")).put(bal(1, TEST_RECIPIENT, "3500000"))
+        val mixed = reader.extractTransferDetails(
+            txResult(
+                org.json.JSONArray()
+                    .put(systemTransfer("acctB", "acctR"))
+                    .put(tokenChecked("acctB", "acctR", "3500000")),
+                pre, post
+            )
+        )
+        check("R2-N1 system SOL transfer beside a token leg: token leg still extracted (no poisoning)",
+            mixed != null && mixed.size == 1 && mixed[0].fromOwner == buyer &&
+                mixed[0].toOwner == TEST_RECIPIENT && mixed[0].amountBaseUnits == 3_500_000L)
+        val systemOnly = reader.extractTransferDetails(
+            txResult(org.json.JSONArray().put(systemTransfer("acctB", "acctR")), pre, pre)
+        )
+        check("R2-N1 system-only transaction extracts as no token transfers (empty, not null)",
+            systemOnly != null && systemOnly.isEmpty())
+        val innerMixed = reader.extractTransferDetails(
+            txResult(
+                org.json.JSONArray().put(tokenChecked("acctB", "acctR", "3500000")),
+                pre, post,
+                org.json.JSONArray().put(
+                    org.json.JSONObject().put("index", 0)
+                        .put("instructions", org.json.JSONArray().put(systemTransfer("acctB", "acctR")))
+                )
+            )
+        )
+        check("R2-N1 system transfer as an INNER instruction does not poison extraction either",
+            innerMixed != null && innerMixed.size == 1 && innerMixed[0].toOwner == TEST_RECIPIENT)
+    }
+    run {
+        // N-2 (reconciler arm): with the send gate in place, a null
+        // LVBH proves the transaction was never handed to the
+        // wallet — a conclusive no-match scan closes the intent;
+        // an inconclusive scan still leaves it open; a match wins.
+        val buyer = Base58.encode(ByteArray(32) { 42 })
+        val noHeight = auditOutcome(buyer).copy(blockhash = null, lastValidBlockHeight = null)
+        val noChainSettlement = SettlementVerifier(FakeChain(null)) { TEST_RECIPIENT }
+        val verifiedSettlement = SettlementVerifier(
+            FakeChain(
+                ObservedTransaction(
+                    "sig-ok", true,
+                    listOf(ObservedTransfer(TEST_RECIPIENT, MoneyConfig.USDC_MINT, MoneyConfig.PRICE_USDC_BASE_UNITS)),
+                    false
+                )
+            )
+        ) { TEST_RECIPIENT }
+        check("R2-N2 null LVBH + conclusive no-match scan -> non-submission close",
+            NoSignatureReconciler(
+                FakeNoSigChain(signatures = emptyList(), height = 500L), noChainSettlement
+            ).reconcile(noHeight) == NoSignatureReconciler.Result.ExpiredUnmatched)
+        check("R2-N2 null LVBH + unreadable signature list -> stays open",
+            NoSignatureReconciler(
+                FakeNoSigChain(signatures = null, height = 500L), noChainSettlement
+            ).reconcile(noHeight) == NoSignatureReconciler.Result.StillOpen)
+        check("R2-N2 null LVBH + matching candidate -> match wins",
+            NoSignatureReconciler(
+                FakeNoSigChain(
+                    signatures = listOf("sig-ok"),
+                    details = listOf(
+                        ObservedTransferDetail(
+                            buyer, TEST_RECIPIENT,
+                            MoneyConfig.USDC_MINT, MoneyConfig.PRICE_USDC_BASE_UNITS
+                        )
+                    ),
+                    height = 500L
+                ),
+                verifiedSettlement
+            ).reconcile(noHeight) == NoSignatureReconciler.Result.Matched("sig-ok"))
+    }
+    run {
+        // N-2 (stamp gate): if the build-context stamp cannot be
+        // made durable, the purchase refuses BEFORE the wallet is
+        // asked — the sender is never called and the durable
+        // record is FAILED (nothing submitted, nothing charged).
+        val store = ValueFailStore()
+        store.failWhenValueContains = "buildhash"
+        val flow = PurchaseFlow(store)
+        val settlement = SettlementVerifier(FakeChain(null)) { TEST_RECIPIENT }
+        val sender = CountingSender(SendOutcome.Sent("sig-should-not-exist"))
+        val coord = PurchaseCoordinator(
+            flow, EntitlementLedger(InMemorySecureStore()), settlement, RecordingBlockhash(),
+            sender,
+            object : SheetConfirmer { override fun confirm(sheet: PurchaseSheetData) = true },
+            noSignatureReconciler = NoSignatureReconciler(FakeNoSigChain(), settlement)
+        ) { TEST_RECIPIENT }
+        val r = coord.purchase(MoneyConfig.ITEM_DAY_PASS, Base58.encode(ByteArray(32) { 43 }))
+        val key = store.keysWithPrefix("intent:").single().removePrefix("intent:")
+        val durable = PurchaseFlow(store).outcomeFor(key)
+        check("R2-N2 failed build-context stamp refuses the purchase before the wallet (no send, FAILED durable)",
+            r is PurchaseResult.Failed && sender.calls == 0 && durable?.state == PurchaseState.FAILED)
+    }
+    run {
+        // N-2 (end to end): process death during the build leaves
+        // an AWAITING_WALLET record with NO build context. The
+        // next launch converts it and — null LVBH under the send
+        // gate proving it was never sent — closes it on a
+        // conclusive scan, freeing the buyer.
+        val store = InMemorySecureStore()
+        val buyer = Base58.encode(ByteArray(32) { 44 })
+        val flow1 = PurchaseFlow(store)
+        val begun = flow1.beginIntent(MoneyConfig.ITEM_DAY_PASS) as PurchaseFlow.BeginResult.Begun
+        flow1.recordOutcome(
+            PurchaseOutcome(
+                begun.idempotencyKey, PurchaseState.AWAITING_WALLET, null, null,
+                "Awaiting wallet.", buyer, createdAtMs = 5L
+            )
+        )
+        val flow2 = PurchaseFlow(store)
+        val settlement = SettlementVerifier(FakeChain(null)) { TEST_RECIPIENT }
+        val sender = CountingSender(SendOutcome.Sent("sig-after"))
+        val coord2 = PurchaseCoordinator(
+            flow2, EntitlementLedger(InMemorySecureStore()), settlement, RecordingBlockhash(),
+            sender,
+            object : SheetConfirmer { override fun confirm(sheet: PurchaseSheetData) = true },
+            noSignatureReconciler = NoSignatureReconciler(
+                FakeNoSigChain(signatures = emptyList(), height = 500L), settlement
+            )
+        ) { TEST_RECIPIENT }
+        coord2.reconcileOnLaunch(buyer)
+        val closed = flow2.outcomeFor(begun.idempotencyKey)
+        check("R2-N2 stranded record with no build context closes FAILED at launch on a conclusive scan",
+            closed?.state == PurchaseState.FAILED)
+        val after = coord2.purchase(MoneyConfig.ITEM_DAY_PASS, buyer)
+        check("R2-N2 the freed buyer can purchase again (sender called, not blocked)",
+            after !is PurchaseResult.UnresolvedNoSignature && sender.calls == 1)
+    }
+    run {
+        // N-2 (recipient re-stamp): an open UNRESOLVED record with
+        // no recipient is re-stamped from the provider at launch
+        // and reconciles, instead of wedging its buyer forever.
+        val store = InMemorySecureStore()
+        val buyer = Base58.encode(ByteArray(32) { 45 })
+        val flow = PurchaseFlow(store)
+        flow.recordOutcome(
+            PurchaseOutcome(
+                "restamp-key", PurchaseState.UNRESOLVED_NO_SIGNATURE, null, null,
+                PurchaseCoordinator.UNRESOLVED_USER_MESSAGE, buyer,
+                blockhash = "bh", lastValidBlockHeight = 1_000L,
+                amountBaseUnits = MoneyConfig.PRICE_USDC_BASE_UNITS, mint = MoneyConfig.USDC_MINT,
+                recipient = null, walletErrorKind = "SESSION_CLOSED", createdAtMs = 1L
+            )
+        )
+        val settlement = SettlementVerifier(FakeChain(null)) { TEST_RECIPIENT }
+        val coord = PurchaseCoordinator(
+            flow, EntitlementLedger(InMemorySecureStore()), settlement, RecordingBlockhash(),
+            CountingSender(SendOutcome.Sent("sig-x")),
+            object : SheetConfirmer { override fun confirm(sheet: PurchaseSheetData) = true },
+            noSignatureReconciler = NoSignatureReconciler(
+                FakeNoSigChain(signatures = emptyList(), height = 1_001L), settlement
+            )
+        ) { TEST_RECIPIENT }
+        coord.reconcileOnLaunch(buyer)
+        val after = flow.outcomeFor("restamp-key")
+        check("R2-N2 recipient-less UNRESOLVED record is re-stamped and expiry-closed at launch",
+            after?.state == PurchaseState.FAILED && after?.recipient == TEST_RECIPIENT)
+    }
+    run {
+        // R2 residual (B-F4 doctrine in flow.reconcileOnLaunch): a
+        // failed UNKNOWN marking neither reports a conversion nor
+        // disturbs the durable state; healed, the next pass
+        // converts.
+        val store = PutFailStore()
+        val buyer = Base58.encode(ByteArray(32) { 46 })
+        val flow1 = PurchaseFlow(store)
+        val begun = flow1.beginIntent(MoneyConfig.ITEM_DAY_PASS) as PurchaseFlow.BeginResult.Begun
+        flow1.recordOutcome(
+            PurchaseOutcome(
+                begun.idempotencyKey, PurchaseState.AWAITING_WALLET, null, null,
+                "Awaiting wallet.", buyer
+            )
+        )
+        store.failWhen = { it == "intent:" + begun.idempotencyKey }
+        val flow2 = PurchaseFlow(store)
+        val first = flow2.reconcileOnLaunch()
+        check("R2-F4r failed UNKNOWN marking reports no conversion and keeps the durable state",
+            first.isEmpty() &&
+                flow2.outcomeFor(begun.idempotencyKey)?.state == PurchaseState.AWAITING_WALLET)
+        store.failWhen = { false }
+        val second = flow2.reconcileOnLaunch()
+        check("R2-F4r healed store converts on the next pass",
+            second.size == 1 && second[0].state == PurchaseState.UNKNOWN &&
+                flow2.outcomeFor(begun.idempotencyKey)?.state == PurchaseState.UNKNOWN)
+    }
+
     println("== AC-09: single price source ==")
     check("AC-09 price anchor $3.50 (P6-b)", MoneyConfig.PRICE_USD_CENTS == 350L && MoneyConfig.priceUsdDisplay() == "$3.50")
     check("AC-09 rail 3.50 USDC at 6dp = anchor x10^6 (P6-c 1:1)", MoneyConfig.PRICE_USDC_BASE_UNITS == MoneyConfig.PRICE_USD_CENTS * 10_000L)

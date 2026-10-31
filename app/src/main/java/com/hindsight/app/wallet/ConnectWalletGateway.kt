@@ -189,7 +189,6 @@ class ConnectWalletGateway(
         if (!connectInFlight.compareAndSet(false, true)) {
             return Result.failure(WalletUiException(CONNECT_IN_PROGRESS_MESSAGE))
         }
-        val priorPublicKey = connectedPublicKey()
         return try {
             ui.value = WalletUiState.Working
             val auth = withWalletActivity { activity -> client.connect(activity) }
@@ -215,8 +214,15 @@ class ConnectWalletGateway(
             // by a cancelled connect would be permanent for the
             // process. Success (Connected) and failure (Error)
             // states are deliberate and are left untouched.
+            // TEKKADAN R2 audit N-1: restore from the authorization
+            // as it stands NOW, not the pre-attempt snapshot — if
+            // cancellation landed after the SDK's establish() had
+            // already written the new authorization, the snapshot
+            // would show Disconnected for a live connection (and
+            // the collector, which consumed that emission while
+            // Working, would never resync it).
             if (ui.value is WalletUiState.Working) {
-                restoreConnectedState(priorPublicKey)
+                restoreConnectedState(connectedPublicKey())
             }
         }
     }
