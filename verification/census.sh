@@ -67,5 +67,71 @@ pos "backup exclusion for encrypted store (AC-02)" "paper_moon_secure.xml" "$MAI
 pos "requestPurchase bridge method (AC-04)" "fun requestPurchase" "$MAIN/java/com/hindsight/app/wallet"
 pos "bundle live price fed by bridge getter (AC-09 re-pinned)" "usdAnchor" "$MAIN/assets/game"
 pos "requestSignIn bridge method (AC-01)" "fun requestSignIn" "$MAIN/java/com/hindsight/app/wallet"
+
+# ---------------------------------------------------------------
+# v0.2.10 Seeker Connect censuses (Gate 0). Source-level halves;
+# the artifact-level halves (dex/AAR) live in v029_gate.sh and
+# the seal record.
+# ---------------------------------------------------------------
+WALLET_SRC="$MAIN/java/com/hindsight/app/wallet"
+# Comment-stripped code census (v025's discipline: doc comments
+# legitimately NAME the barred things; only code counts).
+count_code() { # name, regex, path...
+    name="$1"; pattern="$2"; shift 2
+    n=$(python3 - "$pattern" "$@" <<'PYEOF'
+import glob, os, re, sys
+pattern = sys.argv[1]
+total = 0
+for path in sys.argv[2:]:
+    files = glob.glob(path + "/**/*.kt", recursive=True) if os.path.isdir(path) else [path]
+    for f in files:
+        src = open(f, encoding="utf-8", errors="replace").read()
+        src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+        src = re.sub(r"//[^\n]*", "", src)
+        total += len(re.findall(pattern, src))
+print(total)
+PYEOF
+)
+    echo "census $name = $n"
+    if [ "$n" -ne 0 ]; then fail=1; fi
+}
+count_code "stock SharedPreferencesAuthorizationCache in code (C-06 barred: must be 0)" "SharedPreferencesAuthorizationCache" "$MAIN/java"
+count_code "in-memory authorization cache in code (C-06 barred: must be 0)" "MemoryAuthorizationCache" "$MAIN/java"
+count_code "app-owned ActivityResultSender construction (C-19/A1: must be 0)" "ActivityResultSender\(" "$MAIN/java"
+count_code "app-owned registerForActivityResult (C-19/A2: must be 0)" "registerForActivityResult" "$MAIN/java"
+count_code "clientlib imports in the migrated files (C-04 ii: must be 0)" "com\.solana\.mobilewalletadapter" \
+  "$MAIN/java/com/hindsight/app/MainActivity.kt" \
+  "$MAIN/java/com/hindsight/app/ui/WalletScreen.kt" \
+  "$MAIN/java/com/hindsight/app/ui/GameScreen.kt" \
+  "$WALLET_SRC/PaperMoonWalletBridge.kt" \
+  "$WALLET_SRC/ConnectWalletGateway.kt"
+count_code "legacy WalletManager / WalletTokenStore in code (C-04: must be 0)" "WalletManager|WalletTokenStore" "$MAIN/java"
+count_code "throwable logging in the wallet seam (C-14: must be 0)" "printStackTrace" "$WALLET_SRC"
+count "availability probing outside the wallet surface (C-12: WalletScreen only)" "walletAvailability()" \
+  "$MAIN/java/com/hindsight/app/MainActivity.kt" "$MAIN/java/com/hindsight/app/PaperMoonApp.kt" \
+  "$MAIN/java/com/hindsight/app/ui/GameScreen.kt" "$MAIN/java/com/hindsight/app/ui/HomeScreen.kt" \
+  "$WALLET_SRC/PaperMoonWalletBridge.kt"
+# C-13/S-8: authorization-state reads at the claim/consume entry
+# points are barred — those paths consult the shell's bound
+# identity and the ledgers only. (The bridge's connect/sign-in/
+# purchase reads of the gateway are legitimate and enumerated in
+# the build record; this check is scoped to the two functions.)
+n=$(python3 - "$WALLET_SRC/PaperMoonWalletBridge.kt" <<'PYEOF'
+import re, sys
+src = open(sys.argv[1], encoding="utf-8").read()
+total = 0
+for fname in ("claimRookie", "consumeRookieRide"):
+    m = re.search(r"fun " + fname + r"\b.*?(?=\n    @JavascriptInterface|\n    /\*\*|\Z)", src, flags=re.S)
+    body = m.group(0) if m else ""
+    total += len(re.findall(r"gateway\.|authorization", body))
+print(total)
+PYEOF
+)
+echo "census authorization reads inside claim/consume (C-13/S-8: must be 0) = $n"
+if [ "$n" -ne 0 ]; then fail=1; fi
+pos "Connect cache key present in the adapter (C-06)" "seeker_connect_auth_v1" "$WALLET_SRC"
+pos "gateway restores at init (C-13)" "client.restore()" "$WALLET_SRC"
+pos "disconnect unbinds the shell verifier (C-09)" "shellVerifier.unbind()" "$WALLET_SRC"
+pos "dialogs mounted in MainActivity composition (C-18)" "SeekerConnectDialogs" "$MAIN/java/com/hindsight/app/MainActivity.kt"
 if [ "$fail" -ne 0 ]; then echo "CENSUS FAILURES PRESENT"; exit 1; fi
 echo "all censuses clean"
