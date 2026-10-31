@@ -12,8 +12,8 @@ android {
         applicationId = "com.hindsight.app"
         minSdk = 28
         targetSdk = 35
-        versionCode = 13
-        versionName = "0.2.8"
+        versionCode = 15
+        versionName = "0.2.10"
 
         vectorDrawables { useSupportLibrary = true }
     }
