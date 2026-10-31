@@ -350,7 +350,10 @@ class ConnectWalletGateway(
      * call site, so disconnect never signed the user out); (3)
      * the caller surfaces the honest residue copy on failure.
      * A failed deauthorize is never re-attempted silently in the
-     * background.
+     * background. A WALLET-side cancellation of the attempt
+     * (the user dismissing the wallet's own dialog) is reported
+     * as a failed revoke so (3) always gets its verdict; only
+     * the CALLER's own cancellation propagates as an exception.
      */
     suspend fun disconnect(): DisconnectOutcome {
         // Presence check only: whether ANY authorization is held.
@@ -400,6 +403,26 @@ class ConnectWalletGateway(
                 },
                 unbind = { shellVerifier.unbind() }
             )
+        } catch (e: CancellationException) {
+            // DisconnectSequence guarantees the forget + unbind
+            // ran before rethrowing. Whose cancellation is this?
+            // If OUR caller cancelled (host activity destroyed,
+            // the caller's scope disposed), structured concurrency
+            // wins — ensureActive rethrows and the exception
+            // propagates exactly as A-F4 requires. If the WALLET
+            // side cancelled (the user dismissed the wallet's own
+            // dialog — the SDK's no-wallet sheet is the R7 case),
+            // this coroutine is still alive, and C-09 owes the
+            // caller a verdict: the deauthorize did NOT succeed.
+            // Returning false lets the surface disclose the
+            // residue; letting the exception escape instead
+            // killed the caller's coroutine silently AFTER the
+            // forget had completed, and the honest copy never
+            // rendered (runtime battery #2, cell R7: premise
+            // verified, disconnect completed, residue note
+            // absent). Same discrimination as the send seam.
+            currentCoroutineContext().ensureActive()
+            false
         } finally {
             // The local forget ran (DisconnectSequence guarantees
             // it even on cancellation): the surface truth is
