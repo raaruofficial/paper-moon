@@ -147,7 +147,13 @@ def scan_aars(aar_dir):
                 class_names = [n for n in jf.namelist() if n.endswith(".class")]
                 hits = []
                 for n in class_names:
-                    if b"registerForActivityResult" in jf.read(n):
+                    data = jf.read(n)
+                    # The SDK registers through the registry object
+                    # directly (ActivityResultRegistry.register) as
+                    # well as through ComponentActivity helpers —
+                    # pre-filter on the registry type reference,
+                    # which every registration path carries.
+                    if b"ActivityResultRegistry" in data or b"registerForActivityResult" in data:
                         hits.append(n)
             for hit in hits:
                 fqcn = hit[:-len(".class")].replace("/", ".")
