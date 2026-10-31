@@ -559,13 +559,18 @@ disconnect_via_ui() { # ends disconnected or returns 1; approves a deauthorize s
   if wait_sheet "$TMPD/sheet-deauth.xml" 18; then
     approve_sheet "$TMPD/sheet-deauth.xml" || true
   fi
-  # The SDK error dialog (forced-failure path) dismisses itself into state;
-  # tap a dismiss control if one lingers.
+  # The SDK error dialog (forced-failure path) presents its own
+  # window OVER the wallet surface: a hierarchy dump taken while
+  # it is up shows the dialog, not the surface (and any surface
+  # copy, e.g. the residue note, is occluded). Dismiss it IN
+  # PLACE via its "Close" control — never by navigating, which
+  # would reset the surface's remember-scoped state — then wait
+  # for the surface itself.
   local g="$TMPD/disconnect-final.xml" i
   for i in 1 2 3 4 5 6 7 8 9 10; do
     if dump_ui "$g"; then
       if grep -q "CONNECTED" "$g" && grep -q "$EXPECTED_PUBKEY" "$g"; then sleep 2; continue; fi
-      if grep -qE "text=\"(Dismiss|OK)\"" "$g"; then tap_text "$g" "Dismiss" || tap_text "$g" "OK" || true; sleep 1; fi
+      if grep -qE "text=\"(Dismiss|OK|Close)\"" "$g"; then tap_text "$g" "Dismiss" || tap_text "$g" "OK" || tap_text "$g" "Close" || true; sleep 2; continue; fi
       return 0
     fi
     sleep 2
@@ -788,17 +793,28 @@ log "R7 premise: mock disabled = $mock_disabled"
 if [ "$mock_disabled" != "yes" ]; then
   cell R7 FIXTURE-LIMITED "pm disable did not take on this AVD (checked via pm list packages -d); forced-failure premise not established"
 elif disconnect_via_ui; then
-  dump_ui "$OUT/hier-disconnect-residue.xml" || true; snap "disconnect-residue.png"
-  if grep -q "still lists Paper Moon as connected" "$OUT/hier-disconnect-residue.xml"; then
-    cell R7 PASS "failed deauthorize disclosed with the verbatim residue note; local forget completed"
-  else
-    goto_wallet || true
-    dump_ui "$OUT/hier-disconnect-residue2.xml" || true
-    if grep -q "still lists Paper Moon as connected" "$OUT/hier-disconnect-residue2.xml"; then
-      cell R7 PASS "residue note present on the wallet surface after forced-failure disconnect"
-    else
-      cell R7 FAIL "disconnect completed but the residue note was not found on either dump"
+  # Battery #3 cell cure: battery #2's FAIL was substantially a
+  # CELL defect — its first dump was occluded by the SDK error
+  # dialog's window, and its fallback re-entered the wallet
+  # surface (goto_wallet), resetting the remember-scoped
+  # residue note before the second dump. Poll IN PLACE on the
+  # same composition: dismiss a lingering dialog via "Close",
+  # re-dump, never navigate.
+  r7note=""
+  for i in 1 2 3 4 5 6; do
+    dump_ui "$OUT/hier-disconnect-residue.xml" || true
+    if grep -q "still lists Paper Moon as connected" "$OUT/hier-disconnect-residue.xml"; then r7note="yes"; break; fi
+    if grep -qE "text=\"(Close|Dismiss|OK)\"" "$OUT/hier-disconnect-residue.xml"; then
+      tap_text "$OUT/hier-disconnect-residue.xml" "Close" || tap_text "$OUT/hier-disconnect-residue.xml" "Dismiss" || tap_text "$OUT/hier-disconnect-residue.xml" "OK" || true
     fi
+    sleep 3
+  done
+  snap "disconnect-residue.png"
+  if [ -n "$r7note" ]; then
+    cell R7 PASS "failed deauthorize disclosed with the verbatim residue note on the same surface; local forget completed"
+  else
+    dump_ui "$OUT/hier-disconnect-residue2.xml" || true
+    cell R7 FAIL "disconnect completed but the residue note was not found on the in-place dumps (dialog dismissed in place; no navigation)"
   fi
 else
   cell R7 FAIL "forced-failure disconnect flow did not complete"
