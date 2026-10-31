@@ -1,0 +1,175 @@
+name: PM v0.2.10 mid-session destruction cell (A4/A-F3)
+
+# Mid-session activity-destruction cell (Gate 0 C-19 A4 arm +
+# TEKKADAN A-F3 runtime arm) for the v0.2.10 Seeker Connect
+# candidate, per the SOLANA RESOURCES BINDING 2026-10-29 §2.2
+# recipe: PIN-locked API 36 AVD, Mock MWA Wallet built from
+# source at pinned commit d444aff0, throwaway in-job key.
+#
+# The candidate APK is hash-gated before install: the signed
+# v0.2.10 candidate (Android CI run 41156067405, artifact
+# 13025146200, sha256 c01f5be8...). No predecessor is needed:
+# this cell exercises connect sessions on the candidate only.
+# Trigger: push to this verification branch only — never merged
+# into the release line.
+
+on:
+  push:
+    branches: [runtime/v0210-midcell]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  battery-api36:
+    name: MIDCELL v0.2.10 — mid-session destruction (API 36)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM group permissions
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -la /dev/kvm
+
+      - name: Install emulator runtime libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libpulse0 libgl1 libegl1 libnss3 libxcb-cursor0 > /dev/null
+          ldconfig -p | grep -c libpulse || true
+
+      - name: Set up JDK 17 (mock wallet build)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Generate throwaway mock key (in-job only)
+        run: |
+          python3 - <<'PY'
+          import hashlib, os
+          q = 2**255 - 19
+          def inv(x): return pow(x, q - 2, q)
+          d = -121665 * inv(121666) % q
+          I = pow(2, (q - 1) // 4, q)
+          def xrecover(y):
+              xx = (y * y - 1) * inv(d * y * y + 1)
+              x = pow(xx, (q + 3) // 8, q)
+              if (x * x - xx) % q != 0: x = (x * I) % q
+              if x % 2 != 0: x = q - x
+              return x
+          By = 4 * inv(5) % q
+          B = [xrecover(By) % q, By % q]
+          def edwards(P, Q):
+              x1, y1 = P; x2, y2 = Q
+              x3 = (x1 * y2 + x2 * y1) * inv(1 + d * x1 * x2 * y1 * y2)
+              y3 = (y1 * y2 + x1 * x2) * inv(1 - d * x1 * x2 * y1 * y2)
+              return [x3 % q, y3 % q]
+          def scalarmult(P, e):
+              if e == 0: return [0, 1]
+              Q = scalarmult(P, e // 2)
+              Q = edwards(Q, Q)
+              if e & 1: Q = edwards(Q, P)
+              return Q
+          ALPH = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+          def b58enc(bts):
+              n = int.from_bytes(bts, 'big'); s = ''
+              while n > 0:
+                  n, r = divmod(n, 58); s = ALPH[r] + s
+              pad = 0
+              for c in bts:
+                  if c == 0: pad += 1
+                  else: break
+              return '1' * pad + s
+          seed = os.urandom(32)
+          h = hashlib.sha512(seed).digest()
+          a = 2**254 + sum(2**i * ((h[i // 8] >> (i % 8)) & 1) for i in range(3, 254))
+          A = scalarmult(B, a)
+          x, y = A
+          enc = bytearray(y.to_bytes(32, 'little'))
+          if x & 1: enc[31] |= 0x80
+          open('mock-seed.b58', 'w').write(b58enc(seed))
+          open('expected-pubkey.txt', 'w').write(b58enc(bytes(enc)))
+          print('expected pubkey:', b58enc(bytes(enc)))
+          PY
+          echo "EXPECTED_PUBKEY=$(cat expected-pubkey.txt)" >> "$GITHUB_ENV"
+
+      - name: Download candidate artifact (hash-gated)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA256: c01f5be8bb031bc882dda53e69cba44520bfb371283dd20e9cd549f262763e28
+        run: |
+          set -euo pipefail
+          gh api "repos/raaruofficial/paper-moon/actions/artifacts/13025146200/zip" > /tmp/cand.zip
+          mkdir -p /tmp/cand && unzip -o /tmp/cand.zip -d /tmp/cand
+          cp /tmp/cand/app-release.apk "$GITHUB_WORKSPACE/pm-under-test.apk"
+          actual="$(sha256sum "$GITHUB_WORKSPACE/pm-under-test.apk" | awk '{print $1}')"
+          echo "candidate APK sha256: $actual"
+          if [ "$actual" != "$CANDIDATE_SHA256" ]; then
+            echo "::error::Candidate APK hash mismatch — aborting before any run"
+            exit 1
+          fi
+
+      - name: Clone Mock MWA Wallet at pinned commit
+        env:
+          MOCK_COMMIT: d444aff0c72dadd0f5c442ea2bc3559b62916e01
+        run: |
+          set -euo pipefail
+          git clone https://github.com/solana-mobile/mock-mwa-wallet "$GITHUB_WORKSPACE/mock-src"
+          cd "$GITHUB_WORKSPACE/mock-src"
+          git checkout "$MOCK_COMMIT"
+          git rev-parse HEAD
+
+      - name: Gradle cache (mock wallet)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: mock-gradle-d444aff0-${{ runner.os }}
+
+      - name: Configure + build mock wallet (throwaway key)
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/mock-src"
+          {
+            printf 'privateKey=%s\n' "$(cat "$GITHUB_WORKSPACE/mock-seed.b58")"
+            printf 'walletName=%s\n' "PMTestWallet"
+            printf 'sdk.dir=%s\n' "$ANDROID_HOME"
+          } > local.properties
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug --console=plain --no-daemon 2>&1 | tail -n 25
+          ls -la app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Run the mid-session destruction cell on PIN-locked AVD (API 36)
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          PM_OUT: pm-v0210-midcell-evidence
+          PM_APK: ${{ github.workspace }}/pm-under-test.apk
+          MOCK_APK: ${{ github.workspace }}/mock-src/app/build/outputs/apk/debug/app-debug.apk
+          DEVICE_PIN: "1234"
+        with:
+          api-level: "36"
+          target: google_apis
+          arch: x86_64
+          profile: pixel_7_pro
+          avd-name: pm36-midcell
+          force-avd-creation: true
+          emulator-boot-timeout: 1200
+          ram-size: 8192
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -memory 8192 -no-boot-anim -camera-back none -camera-front none
+          script: bash verification/runtime/verify-midcell.sh
+
+      - name: Upload battery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pm-v0210-midcell-api36
+          path: pm-v0210-midcell-evidence
+          if-no-files-found: warn
+
