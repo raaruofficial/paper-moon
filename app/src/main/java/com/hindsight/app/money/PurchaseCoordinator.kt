@@ -254,8 +254,22 @@ class PurchaseCoordinator(
         // (the app is backgrounded behind the wallet — exactly
         // when Android may kill it) carries everything launch
         // reconciliation needs to convert and resolve it.
+        // TEKKADAN R3: a MISSING build context gates the send
+        // exactly like a failed stamp. A purchase-capable
+        // coordinator whose provider cannot produce the context
+        // (no BuildContextSource) would otherwise send with
+        // nothing durable to reconcile against, and its
+        // unresolved records would carry a null LVBH for a
+        // payment that WAS handed to the wallet — breaking the
+        // reconciler's null-LVBH proof by construction rather
+        // than by wiring. Production's one purchase path (the
+        // bridge's RecordingBlockhashProvider) always produces
+        // the context after a successful build.
+        val buildCtx = (blockhashProvider as? BuildContextSource)?.lastBuildContext()
         var stampFailed = false
-        (blockhashProvider as? BuildContextSource)?.lastBuildContext()?.let { buildCtx ->
+        if (buildCtx == null) {
+            stampFailed = true
+        } else {
             val stamped = flow.recordOutcome(
                 PurchaseOutcome(
                     key, PurchaseState.AWAITING_WALLET, null, null, "Awaiting wallet.", buyerIdentity,

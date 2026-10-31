@@ -115,17 +115,19 @@ class NoSignatureReconciler(
         if (!scanConclusive) return Result.StillOpen
         val lastValid = outcome.lastValidBlockHeight
         if (lastValid == null) {
-            // No recorded validity height. Under the send gate in
-            // PurchaseCoordinator.purchase — the build-context
-            // stamp must persist BEFORE the sender runs — a sent
-            // transaction's intent always carries its LVBH, in
-            // the stamp or in the post-send record. A null LVBH
-            // therefore proves the transaction was never handed
-            // to the wallet: no submittable payment exists, and
-            // the conclusive scan above found no match, so
-            // non-submission is established and the intent closes
-            // instead of wedging its buyer forever (TEKKADAN R2
-            // audit N-2).
+            // No recorded validity height. The send gate in
+            // PurchaseCoordinator.purchase enforces the proof by
+            // construction: the build-context stamp must persist
+            // BEFORE the sender runs, and a provider that cannot
+            // produce the context at all gates the send the same
+            // way — so a sent transaction's intent always carries
+            // its LVBH, in the stamp or in the post-send record.
+            // A null LVBH therefore proves the transaction was
+            // never handed to the wallet: no submittable payment
+            // exists, and the conclusive scan above found no
+            // match, so non-submission is established and the
+            // intent closes instead of wedging its buyer forever
+            // (TEKKADAN R2 audit N-2, enforced per R3).
             return Result.ExpiredUnmatched
         }
         val height = chain.currentBlockHeight()

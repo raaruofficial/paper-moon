@@ -46,8 +46,9 @@ const val RAARU_SKR_TREASURY = "FRShnxX7vi64gtBoA6JPmH9MBuVqtheEQaxA1D17wKdP" //
 class FakeChain(var tx: ObservedTransaction?) : ChainReader {
     override fun fetchTransaction(signature: String): ObservedTransaction? = tx
 }
-class FixedBlockhash : BlockhashProvider {
+class FixedBlockhash : BlockhashProvider, BuildContextSource {
     override fun recentBlockhash(): ByteArray = ByteArray(32) { 9 }
+    override fun lastBuildContext(): BuildContext = BuildContext("fixedhash", 1_000L)
 }
 class CountingSender(var outcome: SendOutcome) : WalletSender {
     var calls = 0
@@ -1472,6 +1473,35 @@ fun main() {
         check("R2-F4r healed store converts on the next pass",
             second.size == 1 && second[0].state == PurchaseState.UNKNOWN &&
                 flow2.outcomeFor(begun.idempotencyKey)?.state == PurchaseState.UNKNOWN)
+    }
+
+    println("== TEKKADAN AUDIT R3: null-LVBH invariant enforced by construction ==")
+    run {
+        // R3-N1: a purchase-capable coordinator whose provider
+        // cannot produce a build context (plain BlockhashProvider,
+        // no BuildContextSource) must refuse BEFORE the wallet is
+        // asked — otherwise it could send a payment whose
+        // unresolved record carries a null LVBH, and the
+        // reconciler's null-LVBH arm would read a sent payment as
+        // never-sent.
+        val store = InMemorySecureStore()
+        val flow = PurchaseFlow(store)
+        val settlement = SettlementVerifier(FakeChain(null)) { TEST_RECIPIENT }
+        val sender = CountingSender(SendOutcome.Sent("sig-should-not-exist"))
+        val plainProvider = object : BlockhashProvider {
+            override fun recentBlockhash(): ByteArray = ByteArray(32) { 11 }
+        }
+        val coord = PurchaseCoordinator(
+            flow, EntitlementLedger(InMemorySecureStore()), settlement, plainProvider,
+            sender,
+            object : SheetConfirmer { override fun confirm(sheet: PurchaseSheetData) = true },
+            noSignatureReconciler = NoSignatureReconciler(FakeNoSigChain(), settlement)
+        ) { TEST_RECIPIENT }
+        val r = coord.purchase(MoneyConfig.ITEM_DAY_PASS, Base58.encode(ByteArray(32) { 47 }))
+        val key = store.keysWithPrefix("intent:").single().removePrefix("intent:")
+        val durable = PurchaseFlow(store).outcomeFor(key)
+        check("R3-N1 context-less provider refuses the purchase before the wallet (no send, FAILED durable)",
+            r is PurchaseResult.Failed && sender.calls == 0 && durable?.state == PurchaseState.FAILED)
     }
 
     println("== AC-09: single price source ==")
