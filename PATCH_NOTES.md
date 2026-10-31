@@ -299,31 +299,93 @@ Branch `feature/v0210-seeker-connect` from the v0.2.8 source pin
     20 device-global all in system processes, 0 token hits,
     0 FATALs) and **R12 PASS** (tcpdump window filed, pcap +
     text). R9/R10 FIXTURE-LIMITED (unchanged WebView
-    hierarchy limit). **R7 FAIL — REAL FINDING, premise
-    verified this time** (mock disabled = yes on-device): the
-    disconnect completed locally but the C-09 residue note
-    never rendered. Root cause, proven from the filed dumps:
-    the deauthorize transact surfaced the SDK's own
-    no-wallet dialog ("We can't find your Seeker" — the C-18
-    root dialogs working); dismissing it ended the attempt in
-    a CancellationException, which DisconnectSequence
-    (correctly, per A-F4) rethrew after the forget + unbind —
-    and WalletScreen's disconnect coroutine, which has no
-    catch, died silently on the propagated exception BEFORE
-    it could render the residue disclosure. The forget was
-    honest; the copy never reached the user. **Cure
-    (b85f1ec):** gateway.disconnect() now discriminates at
-    its boundary with the send seam's own pattern —
-    `currentCoroutineContext().ensureActive()`: a caller-side
-    cancellation still propagates (structured concurrency
-    intact), a wallet-side cancellation returns
-    DisconnectOutcome(deauthorizeSucceeded = false), so the
-    surface always gets its verdict and discloses the
-    residue. Candidate #4 (release run 41158696667, from the
-    pre-cure head 692a80e) is superseded before sealing; the
-    tag moves to b85f1ec (+ this record) for candidate #5,
-    the artifact of record. Battery #3 + midcell re-run on
-    candidate #5; R7 is the cell that must flip to PASS.
+    hierarchy limit). **R7 FAIL — premise verified this
+    time** (mock disabled = yes on-device): the disconnect
+    completed locally but the C-09 residue note was not
+    found on either dump. **CORRECTION OF RECORD
+    (2026-10-30, after TEKKADAN R4's SDK-source analysis
+    and a firsthand read of the cell script):** the root
+    cause recorded in this entry's first write (a
+    CancellationException silently killing WalletScreen's
+    disconnect coroutine) is NOT the primary mechanism and
+    is superseded. R4 proved from the SDK source that
+    dismissing the no-wallet Error dialog cancels nothing —
+    the transact had already failed as
+    SeekerConnectException(NO_WALLET_FOUND), which the
+    attempt maps to a failed revoke: exactly the outcome
+    WalletScreen needs to render the note. The observation
+    is primarily a CELL defect in two parts: (i) the cell's
+    first dump is OCCLUDED — the SDK error dialog is its
+    own window, so the hierarchy dump shows the dialog
+    ("We can't find your Seeker" — the C-18 root dialogs
+    working as designed), not the surface carrying the
+    note; (ii) the cell's fallback re-enters the wallet
+    surface (goto_wallet), resetting the remember-scoped
+    residueNote before the second dump. Battery #3 (on
+    candidate #5) reproduced the signature exactly:
+    dump 1 = the dialog window only, dump 2 = the
+    post-re-entry NONE screen. The investigation DID
+    surface a real secondary gap — a job-cancellation
+    reaching disconnect()'s await() (a different path from
+    the dialog flows) propagated out of the gateway and
+    would have eaten the verdict the same way — cured in
+    b85f1ec and verified clean by TEKKADAN R4:
+    gateway.disconnect() discriminates with the send
+    seam's pattern
+    (`currentCoroutineContext().ensureActive()`) — a
+    caller-side cancellation still propagates, a
+    wallet-side cancellation returns
+    DisconnectOutcome(deauthorizeSucceeded = false), so a
+    live caller always receives its verdict. Candidate #4
+    (release run 41158696667, from the pre-cure head
+    692a80e) is superseded before sealing; the tag moves
+    to b85f1ec (+ this record) for candidate #5, the
+    artifact of record. The battery CELL is cured
+    separately (dismiss the dialog in place via "Close",
+    poll the same composition, never navigate) and
+    battery #4 re-runs R7 on the SAME candidate #5 binary.
+  - **Runtime battery #3 (run 41161999180, on candidate
+    #5 — evidence filed at `v0210-battery3-evidence/`):**
+    PASS R1/R1b/R2/R3/R6/R4/R5/R8/R11/R12; R9/R10
+    FIXTURE-LIMITED (WebView hierarchy); R7 FAIL with the
+    cell-defect signature above (occluded dump +
+    post-re-entry dump); the cured cell re-runs as
+    battery #4 (run 41166615320). 0 FATALs. **C-16
+    sandbox census PASS at runtime:** via the root path
+    on the AVD, SeekerConnectAuthorizationCache.xml is
+    ABSENT in the before-connect and after-disconnect
+    censuses (the stock cache is never used on-device);
+    paper_moon_secure.xml (the adapter's encrypted store)
+    present; no unexpected files. Availability record:
+    the mock resolves as OTHER (the CERTIFIED probe lands
+    on Chrome; the solana-wallet scheme resolves to the
+    mock's handler).
+  - **Midcell #2 (run 41162015851, on candidate #5 —
+    evidence filed at `v0210-midcell2-evidence/`):**
+    MID1 PASS + MID2 PASS, 0 fatals — mid-session
+    activity destruction resolves sealed, the surface
+    settles CONNECTED, and a further disconnect + connect
+    completes in the same process. The C-19 A4 cell
+    "mid-session-activity-destruction" is
+    runtime-evidenced on the sealed candidate.
+  - **Candidate #5 (OF RECORD):** tag v0.2.10 at 36990cc
+    → release run 41161272317, artifact 13027630647, APK
+    sha256 c953607e…; signer cert SHA-256 c3a2cc1e…
+    (lineage-identical to the v0.2.3–v0.2.9 line,
+    verified firsthand locally with apksigner); badging
+    versionCode 15 / 0.2.10 / compileSdk 36 / targetSdk
+    35 / minSdk 28. Gate-vehicle run 41161588417 (mirror
+    of 36990cc): assembleRelease BUILD SUCCESSFUL, and
+    its classes.dex sha256 c4d8d19d… is BYTE-IDENTICAL
+    to candidate #5's release dex — mapping pairing
+    PROVEN. Superseded candidates, all pre-seal, nothing
+    submitted from any of them: #1 8181acae… (run
+    41152940391), #2 c01f5be8… (run 41156067405,
+    artifact 13025146200), #3 030fcdd6… (run 41158028363,
+    artifact 13026212715, signer verified firsthand
+    c3a2cc1e…), #4 a64cffec… (run 41158696667, artifact
+    13026450723, signer c3a2cc1e… via the in-CI identity
+    step).
 
 ## 2026-10-27 — v0.2.8: UI-audit fix pass (bundle + version fields) — THE resubmission candidate
 
