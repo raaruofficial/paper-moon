@@ -10,6 +10,13 @@
  */
 import com.hindsight.app.money.*
 import com.hindsight.app.util.Base58
+import com.hindsight.app.wallet.ConnectAuthorizationCache
+import com.hindsight.app.wallet.ConnectMigration
+import com.hindsight.app.wallet.DisconnectSequence
+import com.solanamobile.seekerconnect.SeekerAccount
+import com.solanamobile.seekerconnect.SeekerWalletCapabilities
+import com.solanamobile.seekerconnect.StoredAuthorization
+import kotlinx.coroutines.runBlocking
 import java.security.KeyPairGenerator
 import java.security.Signature
 import java.security.spec.X509EncodedKeySpec
@@ -93,7 +100,7 @@ fun main() {
         check("GATE settlement verdict RAIL_UNCONFIGURED", settlement.verify("anysig") == SettlementVerifier.Verdict.RAIL_UNCONFIGURED)
         val coord = PurchaseCoordinator(flow, EntitlementLedger(InMemorySecureStore()),
             settlement, FixedBlockhash(), CountingSender(SendOutcome.Sent("s")), object : SheetConfirmer {
-                override fun confirm(sheet: PurchaseSheetData) = true }, { null })
+                override fun confirm(sheet: PurchaseSheetData) = true }, receivingWalletProvider = { null })
         check("GATE coordinator purchase refuses (RailClosed)",
             coord.purchase(MoneyConfig.ITEM_DAY_PASS, Base58.encode(ByteArray(32) { 3 })) is PurchaseResult.RailClosed)
     }
@@ -506,6 +513,282 @@ fun main() {
             afterExpiry is PurchaseResult.Granted && dupSender.calls == 2 &&
                 dupLedger.allReceipts().size == 2)
         now -= MoneyConfig.PASS_DURATION_MS + 1
+    }
+
+    println("== C-06: Connect authorization cache adapter laws (Gate 0) ==")
+    run {
+        val buyerAddr = Base58.encode(ByteArray(32) { 5 })
+        val auth = StoredAuthorization(
+            accounts = listOf(SeekerAccount(buyerAddr, ByteArray(32) { 5 }, "Seeker")),
+            authToken = "token-abc",
+            walletUriBase = "solana-wallet:/",
+            chain = "solana:mainnet",
+            capabilities = SeekerWalletCapabilities(1, 1, listOf("legacy"), listOf("feat"), true)
+        )
+        val store = InMemorySecureStore()
+        val cache = ConnectAuthorizationCache(store)
+        runBlocking {
+            check("C-06 empty store reads as no authorization", cache.get() == null)
+            cache.set(auth)
+            val back = cache.get()
+            check("C-06 set/get round-trips the account", back?.accounts?.firstOrNull()?.address == buyerAddr)
+            check("C-06 round-trips the token opaquely", back?.authToken == "token-abc")
+            check("C-06 learned URI is envelope data only (round-trips)", back?.walletUriBase == "solana-wallet:/")
+            check("C-06 round-trips capabilities", back?.capabilities?.supportsSignAndSendTransactions == true)
+            check("C-06 envelope lives under the one adapter key",
+                store.get(ConnectAuthorizationCache.KEY) != null)
+            check("C-06 no adapter-added store keys",
+                store.keysWithPrefix("").size == 1)
+            // Corrupt envelope: evict + null (vendor law iii).
+            store.put(ConnectAuthorizationCache.KEY, "{not json")
+            check("C-06 corrupt envelope reads as no authorization", cache.get() == null)
+            check("C-06 corrupt envelope is evicted", store.get(ConnectAuthorizationCache.KEY) == null)
+            // Version mismatch: evict + null (never silently trusted, never a crash).
+            cache.set(auth)
+            val raw = store.get(ConnectAuthorizationCache.KEY)!!
+            store.put(ConnectAuthorizationCache.KEY, raw.replace("\"version\":1", "\"version\":99"))
+            check("C-06 version-mismatched envelope reads as no authorization", cache.get() == null)
+            check("C-06 version-mismatched envelope is evicted",
+                store.get(ConnectAuthorizationCache.KEY) == null)
+            // Clear removes everything (the C-09 forget leg's store half).
+            cache.set(auth)
+            cache.clear()
+            check("C-06 clear removes the envelope",
+                cache.get() == null && store.get(ConnectAuthorizationCache.KEY) == null)
+        }
+        // Failed durable save: degrade to in-memory-only for the
+        // process — the session continues, nothing pretends to be
+        // persisted, and a fresh process (new cache, same store)
+        // restores nothing.
+        val failing = PutFailStore()
+        failing.failWhen = { true }
+        val degraded = ConnectAuthorizationCache(failing)
+        runBlocking {
+            degraded.set(auth)
+            check("C-06 failed save degrades to in-memory for the process",
+                degraded.get()?.authToken == "token-abc")
+            check("C-06 degraded authorization is NOT in the durable store",
+                failing.inner.get(ConnectAuthorizationCache.KEY) == null)
+            degraded.clear()
+            check("C-06 degraded cache still clears", degraded.get() == null)
+        }
+        check("C-06 a fresh process restores nothing after a degraded save",
+            runBlocking { ConnectAuthorizationCache(failing).get() } == null)
+    }
+
+    println("== C-09: disconnect sequence (unconditional forget + unbind) ==")
+    runBlocking {
+        var forgotten = false
+        var unbound = false
+        val revoked = DisconnectSequence.run(
+            attemptDeauthorize = { true },
+            forgetLocally = { forgotten = true },
+            unbind = { unbound = true }
+        )
+        check("C-09 successful deauthorize reports revoked; forget+unbind ran",
+            revoked && forgotten && unbound)
+        forgotten = false; unbound = false
+        val threw = DisconnectSequence.run(
+            attemptDeauthorize = { throw RuntimeException("wallet gone") },
+            forgetLocally = { forgotten = true },
+            unbind = { unbound = true }
+        )
+        check("C-09 THROWING deauthorize still forgets + unbinds; reports not-revoked",
+            !threw && forgotten && unbound)
+        forgotten = false; unbound = false
+        val declined = DisconnectSequence.run(
+            attemptDeauthorize = { false },
+            forgetLocally = { forgotten = true },
+            unbind = { unbound = true }
+        )
+        check("C-09 failed deauthorize still forgets + unbinds; reports not-revoked",
+            !declined && forgotten && unbound)
+    }
+
+    println("== C-10: migration seam (legacy token deleted, never read into an authorization) ==")
+    run {
+        val store = InMemorySecureStore()
+        store.put("mwa_auth_token", "legacy-secret")
+        val deleted = ConnectMigration.runOnce(store)
+        check("C-10 legacy token deleted at migration", deleted && store.get("mwa_auth_token") == null)
+        check("C-10 reconnect notice armed when no envelope exists", ConnectMigration.noticePending(store))
+        check("C-10 runOnce is idempotent", !ConnectMigration.runOnce(store))
+        ConnectMigration.dismissNotice(store)
+        check("C-10 notice dismisses", !ConnectMigration.noticePending(store))
+        val withEnvelope = InMemorySecureStore()
+        withEnvelope.put("mwa_auth_token", "legacy-secret")
+        withEnvelope.put(ConnectAuthorizationCache.KEY, "{}")
+        ConnectMigration.runOnce(withEnvelope)
+        check("C-10 existing envelope suppresses the notice", !ConnectMigration.noticePending(withEnvelope))
+        check("C-10 token still deleted when an envelope exists", withEnvelope.get("mwa_auth_token") == null)
+        val clean = InMemorySecureStore()
+        check("C-10 no legacy token -> no deletion, no notice",
+            !ConnectMigration.runOnce(clean) && !ConnectMigration.noticePending(clean))
+    }
+
+    println("== C-21: SESSION_CLOSED unresolved-no-signature machinery ==")
+    // Fakes for the no-signature chain reads.
+    class FakeNoSigChain(
+        var signatures: List<String>? = emptyList(),
+        var details: List<ObservedTransferDetail>? = emptyList(),
+        var height: Long? = 500L
+    ) : NoSignatureReconciler.NoSignatureChainReader {
+        override fun signaturesForAddress(addressBase58: String, limit: Int) = signatures
+        override fun fetchTransferDetails(signature: String) = details
+        override fun currentBlockHeight() = height
+    }
+    class RecordingBlockhash(
+        var ctx: BuildContext = BuildContext("buildhash", 1_000L)
+    ) : BlockhashProvider, BuildContextSource {
+        override fun recentBlockhash(): ByteArray = ByteArray(32) { 7 }
+        override fun lastBuildContext(): BuildContext = ctx
+    }
+    run {
+        val buyer = Base58.encode(ByteArray(32) { 3 })
+        val flow = PurchaseFlow(InMemorySecureStore())
+        val ledger = EntitlementLedger(InMemorySecureStore())
+        // Settlement verifies ONLY the found signature.
+        val settleChain = object : ChainReader {
+            override fun fetchTransaction(signature: String): ObservedTransaction? =
+                if (signature == "sig-found") ObservedTransaction(
+                    signature, true,
+                    listOf(ObservedTransfer(TEST_RECIPIENT, MoneyConfig.USDC_MINT, MoneyConfig.PRICE_USDC_BASE_UNITS)),
+                    false
+                ) else null
+        }
+        val settlement = SettlementVerifier(settleChain) { TEST_RECIPIENT }
+        val noSig = FakeNoSigChain()
+        val sender = CountingSender(SendOutcome.UnresolvedNoSignature("SESSION_CLOSED"))
+        val coord = PurchaseCoordinator(
+            flow, ledger, settlement, RecordingBlockhash(), sender,
+            object : SheetConfirmer { override fun confirm(sheet: PurchaseSheetData) = true },
+            noSignatureReconciler = NoSignatureReconciler(noSig, settlement)) { TEST_RECIPIENT }
+        val r1 = coord.purchase(MoneyConfig.ITEM_DAY_PASS, buyer)
+        check("C-21(i) ambiguous send returns UnresolvedNoSignature, never Failed",
+            r1 is PurchaseResult.UnresolvedNoSignature)
+        check("C-21 sender called exactly once", sender.calls == 1)
+        val open = flow.unresolvedNoSignatureOutcomes()
+        check("C-21 durable UNRESOLVED_NO_SIGNATURE outcome recorded", open.size == 1)
+        val o = open.first()
+        check("C-21 intent record carries buyer/blockhash/LVBH/amount/mint/recipient/kind",
+            o.buyerIdentity == buyer && o.blockhash == "buildhash" &&
+                o.lastValidBlockHeight == 1_000L &&
+                o.amountBaseUnits == MoneyConfig.PRICE_USDC_BASE_UNITS &&
+                o.mint == MoneyConfig.USDC_MINT && o.recipient == TEST_RECIPIENT &&
+                o.walletErrorKind == "SESSION_CLOSED" && o.signature == null)
+        check("C-21 recorded message is the C-23 line (never 'failed'/'not charged')",
+            o.message == PurchaseCoordinator.UNRESOLVED_USER_MESSAGE)
+        // (i) the guard: while open, no new intent, sender never re-called.
+        val r2 = coord.purchase(MoneyConfig.ITEM_DAY_PASS, buyer)
+        check("C-21(i) open outcome blocks a second purchase", r2 is PurchaseResult.UnresolvedNoSignature)
+        check("C-21(i) sender never re-called while open", sender.calls == 1)
+        check("C-21(i) still exactly one intent record", flow.unresolvedNoSignatureOutcomes().size == 1)
+        // (iii) another buyer's identical payment must NOT settle this intent.
+        noSig.signatures = listOf("sig-found")
+        noSig.details = listOf(
+            ObservedTransferDetail(
+                Base58.encode(ByteArray(32) { 8 }), TEST_RECIPIENT,
+                MoneyConfig.USDC_MINT, MoneyConfig.PRICE_USDC_BASE_UNITS
+            )
+        )
+        val r3 = coord.purchase(MoneyConfig.ITEM_DAY_PASS, buyer)
+        check("C-21(iii) another buyer's payment does not settle (buyer-source match)",
+            r3 is PurchaseResult.UnresolvedNoSignature && !ledger.entitlementFor(buyer).passActive)
+        // (iii) the buyer's own payment settles through the normal grant path.
+        noSig.details = listOf(
+            ObservedTransferDetail(
+                buyer, TEST_RECIPIENT, MoneyConfig.USDC_MINT, MoneyConfig.PRICE_USDC_BASE_UNITS
+            )
+        )
+        val r4 = coord.purchase(MoneyConfig.ITEM_DAY_PASS, buyer)
+        check("C-21(iii) matching payment settles to Granted", r4 is PurchaseResult.Granted)
+        check("C-21 outcome closed GRANTED with the found signature",
+            flow.outcomeFor(o.idempotencyKey)?.state == PurchaseState.GRANTED &&
+                flow.outcomeFor(o.idempotencyKey)?.signature == "sig-found")
+        check("C-21 grant is the ledger's exactly-once receipt",
+            ledger.allReceipts().count { it.signature == "sig-found" } == 1)
+    }
+    run {
+        // (iii) expiry: height passes LVBH with no match -> the
+        // not-submitted close; purchase re-opens.
+        val buyer = Base58.encode(ByteArray(32) { 4 })
+        val flow = PurchaseFlow(InMemorySecureStore())
+        val ledger = EntitlementLedger(InMemorySecureStore())
+        val settlement = SettlementVerifier(FakeChain(null)) { TEST_RECIPIENT }
+        val noSig = FakeNoSigChain(signatures = emptyList(), details = emptyList(), height = 1_001L)
+        val sender = CountingSender(SendOutcome.UnresolvedNoSignature("WALLET_ERROR"))
+        val coord = PurchaseCoordinator(
+            flow, ledger, settlement, RecordingBlockhash(), sender,
+            object : SheetConfirmer { override fun confirm(sheet: PurchaseSheetData) = true },
+            noSignatureReconciler = NoSignatureReconciler(noSig, settlement)) { TEST_RECIPIENT }
+        val r1 = coord.purchase(MoneyConfig.ITEM_DAY_PASS, buyer)
+        check("C-21 WALLET_ERROR (the other ambiguous kind) also opens an outcome",
+            r1 is PurchaseResult.UnresolvedNoSignature)
+        val key = flow.unresolvedNoSignatureOutcomes().first().idempotencyKey
+        val freed = coord.reconcileNoSignature(flow.outcomeFor(key)!!)
+        check("C-21(iii) expiry close frees the buyer (reconcile returns null)", freed == null)
+        val closed = flow.outcomeFor(key)
+        check("C-21(iii) expiry close is FAILED with the not-submitted message only here",
+            closed?.state == PurchaseState.FAILED &&
+                closed?.message == PurchaseCoordinator.NOT_SUBMITTED_MESSAGE)
+        check("C-21(iii) nothing granted on expiry", !ledger.entitlementFor(buyer).passActive)
+        sender.outcome = SendOutcome.Failed(TxFailureKind.WALLET_DECLINED)
+        val r2 = coord.purchase(MoneyConfig.ITEM_DAY_PASS, buyer)
+        check("C-21 purchase re-opens after the expiry close",
+            r2 is PurchaseResult.Failed && sender.calls == 2)
+    }
+    run {
+        // Fail-closed: an unreadable chain leaves the outcome open
+        // forever — never closed, never granted.
+        val buyer = Base58.encode(ByteArray(32) { 9 })
+        val flow = PurchaseFlow(InMemorySecureStore())
+        val ledger = EntitlementLedger(InMemorySecureStore())
+        val settlement = SettlementVerifier(FakeChain(null)) { TEST_RECIPIENT }
+        val noSig = FakeNoSigChain(signatures = null, details = null, height = null)
+        val coord = PurchaseCoordinator(
+            flow, ledger, settlement, RecordingBlockhash(),
+            CountingSender(SendOutcome.UnresolvedNoSignature("SESSION_CLOSED")),
+            object : SheetConfirmer { override fun confirm(sheet: PurchaseSheetData) = true },
+            noSignatureReconciler = NoSignatureReconciler(noSig, settlement)) { TEST_RECIPIENT }
+        coord.purchase(MoneyConfig.ITEM_DAY_PASS, buyer)
+        val key = flow.unresolvedNoSignatureOutcomes().first().idempotencyKey
+        val still = coord.reconcileNoSignature(flow.outcomeFor(key)!!)
+        check("C-21 unreadable chain -> outcome stays open (fail-closed)",
+            still is PurchaseResult.UnresolvedNoSignature &&
+                flow.outcomeFor(key)?.state == PurchaseState.UNRESOLVED_NO_SIGNATURE &&
+                !ledger.entitlementFor(buyer).passActive)
+    }
+
+    println("== C-20 (coordinator-level proxy): a certainly-failed send never wedges the buyer ==")
+    // The lifecycle half of C-20 (wallet calls inside the host
+    // activity's lifecycleScope) is device evidence from the
+    // runtime cells; this is the half the harness can prove: the
+    // expired-cache shape — a send that fails certainly (e.g. the
+    // wallet refuses a stale session) closes FAILED and the next
+    // purchase proceeds normally.
+    run {
+        val buyer = Base58.encode(ByteArray(32) { 6 })
+        val flow = PurchaseFlow(InMemorySecureStore())
+        val ledger = EntitlementLedger(InMemorySecureStore())
+        val settlement = SettlementVerifier(
+            FakeChain(
+                ObservedTransaction(
+                    "sig-ok", true,
+                    listOf(ObservedTransfer(TEST_RECIPIENT, MoneyConfig.USDC_MINT, MoneyConfig.PRICE_USDC_BASE_UNITS)),
+                    false
+                )
+            )
+        ) { TEST_RECIPIENT }
+        val sender = CountingSender(SendOutcome.Failed(TxFailureKind.OTHER))
+        val coord = PurchaseCoordinator(
+            flow, ledger, settlement, FixedBlockhash(), sender,
+            object : SheetConfirmer { override fun confirm(sheet: PurchaseSheetData) = true }
+        ) { TEST_RECIPIENT }
+        val r1 = coord.purchase(MoneyConfig.ITEM_DAY_PASS, buyer)
+        sender.outcome = SendOutcome.Sent("sig-ok")
+        val r2 = coord.purchase(MoneyConfig.ITEM_DAY_PASS, buyer)
+        check("C-20 proxy: failed send closes FAILED; next purchase proceeds to Granted",
+            r1 is PurchaseResult.Failed && r2 is PurchaseResult.Granted && sender.calls == 2)
     }
 
     println("== AC-09: single price source ==")

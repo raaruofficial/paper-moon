@@ -140,14 +140,16 @@ class PurchaseCoordinator(
     private val blockhashProvider: BlockhashProvider,
     private val walletSender: WalletSender,
     private val sheetConfirmer: SheetConfirmer,
-    private val receivingWalletProvider: () -> String? =
-        { ReceivingWalletConfig.configuredReceivingWallet },
     /** C-21 no-signature reconciliation. Optional only so the
      *  inert launch coordinator in tests can omit it — production
      *  wiring (PaperMoonApp + the bridge) always supplies it; an
      *  open no-signature outcome with no reconciler stays open
-     *  (fail-closed), it never falls through to a new charge. */
-    private val noSignatureReconciler: NoSignatureReconciler? = null
+     *  (fail-closed), it never falls through to a new charge.
+     *  (Declared before [receivingWalletProvider] so the many
+     *  trailing-lambda call sites for that provider keep binding.) */
+    private val noSignatureReconciler: NoSignatureReconciler? = null,
+    private val receivingWalletProvider: () -> String? =
+        { ReceivingWalletConfig.configuredReceivingWallet }
 ) {
     fun purchase(itemId: String, buyerIdentity: String?): PurchaseResult {
         if (buyerIdentity == null) return PurchaseResult.NotBound

@@ -2,6 +2,57 @@
 
 > **Registry binding (2026-10-29, ARCHIVIST §3):** this file is bound to the estate fault registry `~/workspace/dapp-store-work/KNOWN_FAULT_CLASSES.md` — **Registry v1.0** (launched 2026-10-29), cited by version stamp in every seal. Rows for this shell's ingredients are tracked there under the same IDs — a PATCH_NOTES row and a registry row are never two descriptions of one fault: **KFC-001** sender class (device-proved on this title 2026-10-27; cured v0.2.5; shipped v0.2.8 verified CURED on the binary) · **KFC-002** boundary takeover (PM not yet assessed) · **KFC-003** unguarded WebView (residue OPEN — GameScreen patch rides v0.2.9) · **KFC-004** locked account-level field (FILED + STAFF-CONFIRMED, read-back pending).
 
+## 2026-10-30 — v0.2.10: the Seeker Connect build (Gate 0 step 4) — IN PROGRESS
+
+Branch `feature/v0210-seeker-connect` from the v0.2.8 source pin
+(f5bcd16, tag `pin/v0.2.8-source`). Gate 0 verdict CONDITIONS
+(C-01…C-31) + supplementary ruling S-1; evidence filed under
+`~/workspace/dapp-store-work/paper-moon-rejection/gate0/`.
+
+- **Toolchain (C-01/C-05):** commit 4f435d6 = the U-1 toolchain-only
+  cherry-pick (compileSdk 36, AGP 8.9.1, Kotlin 2.2.20; targetSdk
+  held 35) — the decomposed differential's middle point.
+- **Dependencies (C-04/S-1):** commit 718d77c — direct
+  clientlib-ktx 2.0.8 declaration removed; seeker-connect +
+  seeker-connect-compose exactly 0.2.0 in (test exclusions
+  re-attached); Compose BOM 2026.06.00 → 2026.06.01 (S-1 cascade).
+  Candidate graph gate = diff vs proof run 41148451407 (pending
+  the candidate's own proof run).
+- **Migration (C-04/C-06/C-09/C-10/C-17/C-20):** commit 5907074 —
+  WalletManager/WalletTokenStore deleted; ConnectWalletGateway is
+  the one seam (Application-scoped, built in MainActivity.onCreate
+  pre-setContent; WeakReference activity provider; wallet calls
+  inside the host activity's lifecycleScope); session adapter over
+  EncryptedPaperMoonStore (`seeker_connect_auth_v1`); migration
+  seam deletes the legacy token unread; disconnect = deauthorize
+  attempt → unconditional forget + ShellVerifier.unbind (cures the
+  unbind-with-no-call-site gap); sealed error table for all seven
+  SDK codes; dialogs at the composition root; WalletScreen per
+  C-26. v025_gate.sh deleted in the same commit (C-19).
+- **C-21 SESSION_CLOSED machinery (ship-blocker):** commit 68e3157 —
+  durable UNRESOLVED_NO_SIGNATURE outcomes in the same unresolved
+  guard; intent records carry buyer/blockhash/LVBH/amount/mint/
+  recipient/sealed-kind/timestamp; reconciliation = recipient
+  signature history + SettlementVerifier VERIFIED + buyer-source
+  transfer match, settling through the normal grant path; block-
+  height expiry proves non-submission and closes; never
+  auto-retried, never closed as failed by the error. C-23 line in
+  PurchaseCoordinator.UNRESOLVED_USER_MESSAGE; entitlement JSON
+  surfaces paymentUnresolved; 30 s chain-read-only re-check in
+  GameScreen. Money freeze (C-22): TransactionBuilder /
+  SettlementVerifier / MoneyConfig byte-untouched.
+- **Harness:** 143 checks, 0 failures (98 baseline + C-06 ×13,
+  C-09 ×3, C-10 ×7, C-21 ×21, C-20 proxy ×1). First full CI proof
+  run on the migrated tree: 41151447770 SUCCESS (proof vehicle
+  branch proof/v0210-candidate — the proof workflow exists only on
+  proof branches; the mirror adds that one file and is never
+  merged).
+- **Open gates:** candidate graph diff (S-1), v029 registration
+  audit (C-19 instruments), manifest delta (C-15), sandbox census
+  (C-16), network silence (C-30), render matrix (C-27), ProGuard
+  re-derivation (C-28), runner pinning (C-29), runtime cells,
+  TEKKADAN rounds, seal.
+
 ## 2026-10-27 — v0.2.8: UI-audit fix pass (bundle + version fields) — THE resubmission candidate
 
 One build pass carrying the combined findings of the two standing UI
