@@ -47,6 +47,51 @@ Branch `feature/v0210-seeker-connect` from the v0.2.8 source pin
   branch proof/v0210-candidate — the proof workflow exists only on
   proof branches; the mirror adds that one file and is never
   merged).
+
+- **Gates run so far (2026-10-30 evening):**
+  - Candidate graph gate (S-1): PASS — resolved module sets vs
+    proof run 41148451407 differ ONLY by the clientlib-ktx 2.0.8
+    subtree leaving with the wrapper (web3/kborsh/salkt/buffer/
+    serialization transitives of ktx only); clientlib survives at
+    exactly 2.1.1 transitive-only; seeker-connect/-core/-compose
+    exactly 0.2.0 (C-31).
+  - Manifest delta (C-15): PASS — element multiset IDENTICAL to
+    the v0.2.8 baseline (the <queries> block pre-existed via
+    clientlib; now contributed by seeker-connect); delta is
+    version fields + the INTERNET comment + merger ordering only.
+    All hard bars hold.
+  - C-04 four-part test: (i) direct declaration removed; (ii) no
+    clientlib imports in the migrated files (census); (iii) one
+    clientlib version in the filed graph; (iv) release-dex census
+    via the run's R8 mapping: clientlib 22 class definitions / 0
+    duplicates; seeker-connect 57 / 0; app 133 / 0.
+  - C-11 socket census (candidate dex): Socket referenced only
+    from com.neovisionaries.ws.client.* (clientlib's local
+    association WebSocket client); HttpURLConnection + URL only
+    from SolanaRpcChainReader; no okhttp, no ServerSocket, 0
+    "nostr" strings, 0 ws(s):// literals; https literals = the
+    RPC endpoint, the first-connect base, the frozen identity
+    URI (+2 inert library doc strings).
+  - Release: tag v0.2.10 (moved once, pre-release, after the
+    compile fix below) → run 41152940391 SUCCESS. Candidate APK
+    sha256 8181acae6e5a5624dd8179fee84f38628534ffcb670b4c95c423ede8eae6bc39;
+    signer c3a2cc1e… (lineage-identical to v0.2.3–v0.2.9);
+    versionCode 15 / 0.2.10 / compileSdk 36 / targetSdk 35 in
+    badging. Dex byte-identical to the gate-vehicle build of the
+    same tree (run 41153389230, dex sha256 4dd56d9c…) — the R8
+    mapping pairing for the v029 audit is empirical, not argued.
+  - CORRECTION (verification discipline): the §2.3 proof
+    workflow's green conclusions were cited early in this build
+    as compile evidence; its assemble step pipes through tee
+    without pipefail, so a failed compile still concluded
+    success. The failure (MainActivity SplashScreen onFinished →
+    onDone, my rewrite's error) was caught by the signed release
+    build 41152500481 and fixed in 68fb708. The proof runs'
+    graph/manifest evidence was unaffected (resolution and
+    manifest merging precede compilation; harvest is if:always()).
+    From here the assembleRelease.log, not the conclusion, is the
+    compile evidence.
+
 - **Open gates:** candidate graph diff (S-1), v029 registration
   audit (C-19 instruments), manifest delta (C-15), sandbox census
   (C-16), network silence (C-30), render matrix (C-27), ProGuard
