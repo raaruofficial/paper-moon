@@ -6,7 +6,7 @@ name: PM v0.2.10 runtime verify (Seeker Connect battery)
 # built from source at pinned commit d444aff0, throwaway in-job key.
 #
 # Both Paper Moon APKs are hash-gated before install: the signed
-# v0.2.10 candidate (Android CI run 41156067405, artifact
+# v0.2.10 candidate (Android CI run 41161272317, artifact
 # 13025146200) and the sealed v0.2.9 predecessor (run 41148627915,
 # artifact 13022415758) — the migration cell (R2) connects on the
 # predecessor, then upgrade-installs the candidate over it.
@@ -101,11 +101,11 @@ jobs:
       - name: Download candidate + predecessor artifacts (hash-gated)
         env:
           GH_TOKEN: ${{ github.token }}
-          CANDIDATE_SHA256: c01f5be8bb031bc882dda53e69cba44520bfb371283dd20e9cd549f262763e28
+          CANDIDATE_SHA256: c953607e7284dd1457c77a5944ee54955e2c9c32a3d9c13534b1dfed28c29cdb
           PREDECESSOR_SHA256: 239b28c746300c62c1553602e3a1296405f4b82f9a927db129d0c0a3c3cf7da8
         run: |
           set -euo pipefail
-          gh api "repos/raaruofficial/paper-moon/actions/artifacts/13025146200/zip" > /tmp/cand.zip
+          gh api "repos/raaruofficial/paper-moon/actions/artifacts/13027630647/zip" > /tmp/cand.zip
           mkdir -p /tmp/cand && unzip -o /tmp/cand.zip -d /tmp/cand
           cp /tmp/cand/app-release.apk "$GITHUB_WORKSPACE/pm-under-test.apk"
           actual="$(sha256sum "$GITHUB_WORKSPACE/pm-under-test.apk" | awk '{print $1}')"
