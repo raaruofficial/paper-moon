@@ -354,7 +354,23 @@ Branch `feature/v0210-seeker-connect` from the v0.2.8 source pin
     wedged on the runner for >2 h against battery #3's
     19 min for the identical suite — cancelled and re-run
     on a fresh runner as attempt 2, same commit, same
-    binary). 0 FATALs. **C-16
+    binary; attempt 2 wedged the same way and was also
+    cancelled). **R7 then closed by an isolated micro-cell
+    (run 41168282109, branch `runtime/v0210-r7cell`)** —
+    the same cured cell flow and helpers, only the R7 leg,
+    40-minute job cap: **R7 PASS** — the verbatim residue
+    note rendered on the same surface after the forced
+    failure ("Paper Moon has forgotten this wallet on this
+    device. If your wallet still lists Paper Moon as
+    connected, you can remove it there too."), local forget
+    completed; evidence filed at `v0210-r7cell-evidence/`,
+    render inspected firsthand. The full-battery wedge
+    cause was not isolated (the micro-cell shares the
+    helpers and completed in ~35 min including boot); it
+    is recorded as a runner/AVD-state defect of the long
+    suite, not an app finding — battery #3's full-suite
+    results on this binary stand as the suite of record.
+    0 FATALs. **C-16
     sandbox census PASS at runtime:** via the root path
     on the AVD, SeekerConnectAuthorizationCache.xml is
     ABSENT in the before-connect and after-disconnect
@@ -1130,3 +1146,15 @@ Harness gate tests pin this.
 4. Ruling-gated: AC-06 Terms element, AC-09 listing leg, AC-11,
    P2–P5 surfaces, photosafety P-6 cure-or-waiver. Rail opening
    (dedicated wallet configuration) is an owner action.
+  - **v029 GATE (C-19) — A1–A5 CLEAN on candidate #5**
+    (run locally against the sealed APK + vehicle #5's
+    mapping/AARs/merged manifest): A1 0 sender sites (source
+    + dex); A2 0 direct registrations; A3 exactly one
+    registration call site, classified PER-CALL with
+    evidence; A4 all nine cells indexed (battery #3 +
+    midcell #2); A5 manifest delta (14 merged-manifest
+    lines) itemized + justified. Instruments + outputs in
+    `v0210-gate-evidence/`. SEALED as candidate #5 — see
+    `SEAL_V0210.md` in the rejection folder (fault registry
+    v1.0 cited). NOT SUBMITTED: submission waits on LEG-001
+    (portal read-back, main's lane) and main's fire word.
