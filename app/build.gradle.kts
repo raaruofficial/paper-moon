@@ -77,7 +77,12 @@ android {
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2026.06.00")
+    // Compose BOM 2026.06.01 is the BOM of record for the Connect
+    // build (Gate 0 supplementary ruling S-1): seeker-connect-compose
+    // 0.2.0's own published metadata declares 2026.06.01, and the
+    // sitting adopted the vendor-resolved graph rather than forcing
+    // the held 2026.06.00 against it.
+    val composeBom = platform("androidx.compose:compose-bom:2026.06.01")
     implementation(composeBom)
     // NOTE (T1-S24): this project has no instrumented or unit tests
     // (no src/androidTest, no src/test), so there is deliberately no
@@ -96,23 +101,30 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
 
-    // Solana Mobile Wallet Adapter (official). Provides the native connect /
-    // session / sign flow against the Seeker's Seed Vault wallet.
-    // Docs: https://github.com/solana-mobile/solana-mobile-docs (android-native)
-    // T1-S24 fix: the clientlib's published Gradle metadata puts
-    // androidx.test.ext:junit-ktx in its RELEASE RUNTIME variant, which
-    // drags androidx.test:core (whose library manifest declares the
-    // exported InstrumentationActivityInvoker activities), androidx.test
-    // monitor/services, and junit:junit (jar resources) into every
-    // consumer's production APK — all three shipped inside v0.1.0's
-    // release APK. The adapter never needs its test libraries at
-    // runtime; exclude the whole test family from this dependency.
-    implementation("com.solanamobile:mobile-wallet-adapter-clientlib-ktx:2.0.8") {
+    // Seeker Connect (Gate 0, v0.2.10): the wallet seam. The §2.3
+    // dependency proof (Gate 0 proof run 41148451407) established that
+    // clientlib arrives ONLY as seeker-connect's transitive runtime
+    // dependency at exactly 2.1.1 — not api-exposed, not bundled in
+    // either AAR. The direct clientlib-ktx:2.0.8 declaration is
+    // therefore REMOVED (C-04: one wallet stack, transitive-only);
+    // app code talks to the Connect seam only.
+    // The androidx.test/junit exclusions that used to hang on the
+    // clientlib declaration re-attach HERE (ARCHITECT DEP-01 §2):
+    // clientlib's published metadata puts androidx.test.ext:junit-ktx
+    // in its release runtime variant, which drags androidx.test:core
+    // (exported InstrumentationActivityInvoker activities),
+    // monitor/services, and junit into a consumer's production APK
+    // (the T1-S24 contamination, shipped inside v0.1.0). The cure is
+    // an exclusion on the seeker-connect declaration — never a
+    // re-added direct clientlib declaration kept alive to hang
+    // exclusions on.
+    implementation("com.solanamobile:seeker-connect:0.2.0") {
         exclude(group = "androidx.test")
         exclude(group = "androidx.test.ext")
         exclude(group = "androidx.test.services")
         exclude(group = "junit")
     }
+    implementation("com.solanamobile:seeker-connect-compose:0.2.0")
 
     // AC-02: Keystore-backed EncryptedSharedPreferences for the MWA
     // auth token, entitlement cache, receipts, and claim ledger.
