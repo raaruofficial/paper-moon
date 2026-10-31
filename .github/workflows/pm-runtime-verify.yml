@@ -1,0 +1,325 @@
+name: PM v0.2.9 runtime verify (WAL-002 cure cell)
+
+# SOLANA RESOURCES BINDING 2026-10-29 §2.2 wallet-present cell for the
+# minimal v0.2.9 WAL-002 cure (Gate 0 JUDGE C-32): the CI-built v0.2.9
+# candidate must COMPLETE a wallet connection against the official
+# Mock MWA Wallet (pinned commit d444aff0) on a PIN-locked API 36 AVD;
+# the sealed v0.2.8 binary runs as the negative control and must FAIL
+# the same cell with the KFC-005 iconRelativeUri fault class.
+#
+# Both APKs are hash-gated before install (candidate: Android CI run
+# 41148627915, artifact 13022415758; control: the sealed binary
+# committed on this branch under verification/runtime/control/).
+# The mock's key is a throwaway Ed25519 key generated inside each job
+# (never an estate key); its pubkey is derived in-job and asserted by
+# the driver. Trigger: push to this verification branch only — it is
+# never merged into the release line.
+
+on:
+  push:
+    branches: [runtime/v029-verify]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  candidate-api36:
+    name: CANDIDATE v0.2.9 — connect must COMPLETE (API 36)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM group permissions
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -la /dev/kvm
+
+      - name: Install emulator runtime libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libpulse0 libgl1 libegl1 libnss3 libxcb-cursor0 > /dev/null
+          ldconfig -p | grep -c libpulse || true
+
+      - name: Set up JDK 17 (mock wallet build)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Generate throwaway mock key (in-job only)
+        run: |
+          python3 - <<'PY'
+          import hashlib, os
+          q = 2**255 - 19
+          def inv(x): return pow(x, q - 2, q)
+          d = -121665 * inv(121666) % q
+          I = pow(2, (q - 1) // 4, q)
+          def xrecover(y):
+              xx = (y * y - 1) * inv(d * y * y + 1)
+              x = pow(xx, (q + 3) // 8, q)
+              if (x * x - xx) % q != 0: x = (x * I) % q
+              if x % 2 != 0: x = q - x
+              return x
+          By = 4 * inv(5) % q
+          B = [xrecover(By) % q, By % q]
+          def edwards(P, Q):
+              x1, y1 = P; x2, y2 = Q
+              x3 = (x1 * y2 + x2 * y1) * inv(1 + d * x1 * x2 * y1 * y2)
+              y3 = (y1 * y2 + x1 * x2) * inv(1 - d * x1 * x2 * y1 * y2)
+              return [x3 % q, y3 % q]
+          def scalarmult(P, e):
+              if e == 0: return [0, 1]
+              Q = scalarmult(P, e // 2)
+              Q = edwards(Q, Q)
+              if e & 1: Q = edwards(Q, P)
+              return Q
+          ALPH = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+          def b58enc(bts):
+              n = int.from_bytes(bts, 'big'); s = ''
+              while n > 0:
+                  n, r = divmod(n, 58); s = ALPH[r] + s
+              pad = 0
+              for c in bts:
+                  if c == 0: pad += 1
+                  else: break
+              return '1' * pad + s
+          seed = os.urandom(32)
+          h = hashlib.sha512(seed).digest()
+          a = 2**254 + sum(2**i * ((h[i // 8] >> (i % 8)) & 1) for i in range(3, 254))
+          A = scalarmult(B, a)
+          x, y = A
+          enc = bytearray(y.to_bytes(32, 'little'))
+          if x & 1: enc[31] |= 0x80
+          open('mock-seed.b58', 'w').write(b58enc(seed))
+          open('expected-pubkey.txt', 'w').write(b58enc(bytes(enc)))
+          print('expected pubkey:', b58enc(bytes(enc)))
+          PY
+          echo "EXPECTED_PUBKEY=$(cat expected-pubkey.txt)" >> "$GITHUB_ENV"
+
+      - name: Download candidate artifact 13022415758 + hash gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA256: 239b28c746300c62c1553602e3a1296405f4b82f9a927db129d0c0a3c3cf7da8
+        run: |
+          set -euo pipefail
+          gh api "repos/raaruofficial/paper-moon/actions/artifacts/13022415758/zip" > /tmp/cand.zip
+          mkdir -p /tmp/cand && unzip -o /tmp/cand.zip -d /tmp/cand
+          cp /tmp/cand/app-release.apk "$GITHUB_WORKSPACE/pm-under-test.apk"
+          actual="$(sha256sum "$GITHUB_WORKSPACE/pm-under-test.apk" | awk '{print $1}')"
+          echo "candidate APK sha256: $actual"
+          if [ "$actual" != "$EXPECTED_SHA256" ]; then
+            echo "::error::Candidate APK hash mismatch — aborting before any run"
+            exit 1
+          fi
+
+      - name: Clone Mock MWA Wallet at pinned commit
+        env:
+          MOCK_COMMIT: d444aff0c72dadd0f5c442ea2bc3559b62916e01
+        run: |
+          set -euo pipefail
+          git clone https://github.com/solana-mobile/mock-mwa-wallet "$GITHUB_WORKSPACE/mock-src"
+          cd "$GITHUB_WORKSPACE/mock-src"
+          git checkout "$MOCK_COMMIT"
+          git rev-parse HEAD
+
+      - name: Gradle cache (mock wallet)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: mock-gradle-d444aff0-${{ runner.os }}
+
+      - name: Configure + build mock wallet (throwaway key)
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/mock-src"
+          {
+            printf 'privateKey=%s\n' "$(cat "$GITHUB_WORKSPACE/mock-seed.b58")"
+            printf 'walletName=%s\n' "PMTestWallet"
+            printf 'sdk.dir=%s\n' "$ANDROID_HOME"
+          } > local.properties
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug --console=plain --no-daemon 2>&1 | tail -n 25
+          ls -la app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Run connect cell on PIN-locked AVD (API 36)
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          PM_OUT: pm-v029-evidence-candidate
+          TARGET: candidate
+          PM_APK: ${{ github.workspace }}/pm-under-test.apk
+          MOCK_APK: ${{ github.workspace }}/mock-src/app/build/outputs/apk/debug/app-debug.apk
+          DEVICE_PIN: "1234"
+        with:
+          api-level: "36"
+          target: google_apis
+          arch: x86_64
+          profile: pixel_7_pro
+          avd-name: pm36-candidate
+          force-avd-creation: true
+          emulator-boot-timeout: 1200
+          ram-size: 8192
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -memory 8192 -no-boot-anim -camera-back none -camera-front none
+          script: bash verification/runtime/verify-v029-connect.sh
+
+      - name: Upload cell evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pm-v029-runtime-candidate-api36
+          path: pm-v029-evidence-candidate
+          if-no-files-found: warn
+
+  control-api36:
+    name: CONTROL v0.2.8 — connect must FAIL (KFC-005) (API 36)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM group permissions
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -la /dev/kvm
+
+      - name: Install emulator runtime libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libpulse0 libgl1 libegl1 libnss3 libxcb-cursor0 > /dev/null
+          ldconfig -p | grep -c libpulse || true
+
+      - name: Set up JDK 17 (mock wallet build)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Generate throwaway mock key (in-job only)
+        run: |
+          python3 - <<'PY'
+          import hashlib, os
+          q = 2**255 - 19
+          def inv(x): return pow(x, q - 2, q)
+          d = -121665 * inv(121666) % q
+          I = pow(2, (q - 1) // 4, q)
+          def xrecover(y):
+              xx = (y * y - 1) * inv(d * y * y + 1)
+              x = pow(xx, (q + 3) // 8, q)
+              if (x * x - xx) % q != 0: x = (x * I) % q
+              if x % 2 != 0: x = q - x
+              return x
+          By = 4 * inv(5) % q
+          B = [xrecover(By) % q, By % q]
+          def edwards(P, Q):
+              x1, y1 = P; x2, y2 = Q
+              x3 = (x1 * y2 + x2 * y1) * inv(1 + d * x1 * x2 * y1 * y2)
+              y3 = (y1 * y2 + x1 * x2) * inv(1 - d * x1 * x2 * y1 * y2)
+              return [x3 % q, y3 % q]
+          def scalarmult(P, e):
+              if e == 0: return [0, 1]
+              Q = scalarmult(P, e // 2)
+              Q = edwards(Q, Q)
+              if e & 1: Q = edwards(Q, P)
+              return Q
+          ALPH = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+          def b58enc(bts):
+              n = int.from_bytes(bts, 'big'); s = ''
+              while n > 0:
+                  n, r = divmod(n, 58); s = ALPH[r] + s
+              pad = 0
+              for c in bts:
+                  if c == 0: pad += 1
+                  else: break
+              return '1' * pad + s
+          seed = os.urandom(32)
+          h = hashlib.sha512(seed).digest()
+          a = 2**254 + sum(2**i * ((h[i // 8] >> (i % 8)) & 1) for i in range(3, 254))
+          A = scalarmult(B, a)
+          x, y = A
+          enc = bytearray(y.to_bytes(32, 'little'))
+          if x & 1: enc[31] |= 0x80
+          open('mock-seed.b58', 'w').write(b58enc(seed))
+          open('expected-pubkey.txt', 'w').write(b58enc(bytes(enc)))
+          print('expected pubkey:', b58enc(bytes(enc)))
+          PY
+          echo "EXPECTED_PUBKEY=$(cat expected-pubkey.txt)" >> "$GITHUB_ENV"
+
+      - name: Hash gate — sealed v0.2.8 control APK
+        env:
+          EXPECTED_SHA256: 1e5506846064288c914f301d37fef3d7da63b8300974b5794bc749b0e16714d8
+        run: |
+          set -euo pipefail
+          actual="$(sha256sum "$GITHUB_WORKSPACE/verification/runtime/control/paper-moon-v0.2.8-release.apk" | awk '{print $1}')"
+          echo "control APK sha256: $actual"
+          if [ "$actual" != "$EXPECTED_SHA256" ]; then
+            echo "::error::Control APK hash mismatch — aborting before any run"
+            exit 1
+          fi
+
+      - name: Clone Mock MWA Wallet at pinned commit
+        env:
+          MOCK_COMMIT: d444aff0c72dadd0f5c442ea2bc3559b62916e01
+        run: |
+          set -euo pipefail
+          git clone https://github.com/solana-mobile/mock-mwa-wallet "$GITHUB_WORKSPACE/mock-src"
+          cd "$GITHUB_WORKSPACE/mock-src"
+          git checkout "$MOCK_COMMIT"
+          git rev-parse HEAD
+
+      - name: Gradle cache (mock wallet)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: mock-gradle-d444aff0-${{ runner.os }}
+
+      - name: Configure + build mock wallet (throwaway key)
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/mock-src"
+          {
+            printf 'privateKey=%s\n' "$(cat "$GITHUB_WORKSPACE/mock-seed.b58")"
+            printf 'walletName=%s\n' "PMTestWallet"
+            printf 'sdk.dir=%s\n' "$ANDROID_HOME"
+          } > local.properties
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug --console=plain --no-daemon 2>&1 | tail -n 25
+          ls -la app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Run connect cell on PIN-locked AVD (API 36)
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          PM_OUT: pm-v029-evidence-control
+          TARGET: control
+          PM_APK: ${{ github.workspace }}/verification/runtime/control/paper-moon-v0.2.8-release.apk
+          MOCK_APK: ${{ github.workspace }}/mock-src/app/build/outputs/apk/debug/app-debug.apk
+          DEVICE_PIN: "1234"
+        with:
+          api-level: "36"
+          target: google_apis
+          arch: x86_64
+          profile: pixel_7_pro
+          avd-name: pm36-control
+          force-avd-creation: true
+          emulator-boot-timeout: 1200
+          ram-size: 8192
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -memory 8192 -no-boot-anim -camera-back none -camera-front none
+          script: bash verification/runtime/verify-v029-connect.sh
+
+      - name: Upload cell evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pm-v029-runtime-control-api36
+          path: pm-v029-evidence-control
+          if-no-files-found: warn
