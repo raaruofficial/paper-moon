@@ -290,6 +290,40 @@ Branch `feature/v0210-seeker-connect` from the v0.2.8 source pin
     the pre-cure head) is superseded before sealing; the tag
     moves to this head for candidate #4, the artifact of
     record.
+  - **Runtime battery #2 (run 41156597899, on candidate #2 —
+    cell intelligence, evidence filed at
+    `v0210-battery2-evidence/` in the seal folder):** PASS
+    R1/R1b/R2/R3/R6/R4/R5/R8 — and the two cured cells from
+    battery #1 now grade properly: **R11 PASS** (pid-scoped
+    counting: 0 IllegalStateExceptions on the app's own pids,
+    20 device-global all in system processes, 0 token hits,
+    0 FATALs) and **R12 PASS** (tcpdump window filed, pcap +
+    text). R9/R10 FIXTURE-LIMITED (unchanged WebView
+    hierarchy limit). **R7 FAIL — REAL FINDING, premise
+    verified this time** (mock disabled = yes on-device): the
+    disconnect completed locally but the C-09 residue note
+    never rendered. Root cause, proven from the filed dumps:
+    the deauthorize transact surfaced the SDK's own
+    no-wallet dialog ("We can't find your Seeker" — the C-18
+    root dialogs working); dismissing it ended the attempt in
+    a CancellationException, which DisconnectSequence
+    (correctly, per A-F4) rethrew after the forget + unbind —
+    and WalletScreen's disconnect coroutine, which has no
+    catch, died silently on the propagated exception BEFORE
+    it could render the residue disclosure. The forget was
+    honest; the copy never reached the user. **Cure
+    (b85f1ec):** gateway.disconnect() now discriminates at
+    its boundary with the send seam's own pattern —
+    `currentCoroutineContext().ensureActive()`: a caller-side
+    cancellation still propagates (structured concurrency
+    intact), a wallet-side cancellation returns
+    DisconnectOutcome(deauthorizeSucceeded = false), so the
+    surface always gets its verdict and discloses the
+    residue. Candidate #4 (release run 41158696667, from the
+    pre-cure head 692a80e) is superseded before sealing; the
+    tag moves to b85f1ec (+ this record) for candidate #5,
+    the artifact of record. Battery #3 + midcell re-run on
+    candidate #5; R7 is the cell that must flip to PASS.
 
 ## 2026-10-27 — v0.2.8: UI-audit fix pass (bundle + version fields) — THE resubmission candidate
 
