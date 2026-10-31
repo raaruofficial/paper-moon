@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.hindsight.app"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.hindsight.app"
