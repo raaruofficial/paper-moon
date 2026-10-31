@@ -98,6 +98,101 @@ Branch `feature/v0210-seeker-connect` from the v0.2.8 source pin
   re-derivation (C-28), runner pinning (C-29), runtime cells,
   TEKKADAN rounds, seal.
 
+- **TEKKADAN cross-audit R1 (2026-10-30, two read-only scopes;
+  every finding verified firsthand before fixing; fixes in
+  afadbf4 + 715b481, harness 143 → 170 checks / 0 failures,
+  census clean, C-22 freeze re-verified byte-identical):**
+  - B-F1 CRITICAL (C-21 reconciler): the expiry close fired on
+    an INCONCLUSIVE match scan — an unreadable signature list,
+    a non-final verdict, or unreadable transfer details were
+    all treated as "no match", so a landed payment could be
+    closed FAILED (terminal) past LVBH and the buyer charged
+    twice. Expiry now requires a conclusive scan: every
+    candidate definitively evaluated, none matched.
+  - B-F2 MAJOR (send seam): a CancellationException out of the
+    wallet send (host activity destroyed mid-send — the exact
+    C-21 ambiguity) escaped WalletSender entirely: no outcome
+    recorded, intent stranded at AWAITING_WALLET, in-process
+    wedge, and after relaunch covered by NO guard. Fixed at
+    three layers: the gateway maps wallet-side cancellation
+    (ensureActive distinguishes caller cancellation) and
+    unclassified exceptions to Ambiguous; the coordinator maps
+    ANY exception escaping the sender to
+    UnresolvedNoSignature; the built transaction's context is
+    stamped on the intent BEFORE the send, and a stranded
+    AWAITING_WALLET converts into the no-signature machinery
+    at launch reconciliation.
+  - B-F3 MEDIUM (transfer details): greedy delta pairing over
+    aggregated balances could fabricate a buyer→recipient
+    transfer from colliding equal-amount legs. Extraction is
+    now instruction-accurate (parsed outer+inner transfer
+    legs, owners via the balance table); the delta fallback
+    pairs only forced 1-to-1 groups and returns inconclusive
+    (null) on any ambiguity.
+  - B-F4 MEDIUM (durability): recordOutcome released the
+    in-flight slot and the expiry close freed the buyer even
+    when the durable write FAILED. Slot release is now
+    conditioned on the write landing; a failed expiry-close
+    write keeps the outcome open and blocking.
+  - A-F1 MEDIUM (session cache): a failed re-save degraded to
+    memory but left the SUPERSEDED envelope durable — the
+    next process would have restored the replaced wallet. A
+    failed save now evicts the durable key first.
+  - A-F2 MEDIUM (lock discipline): the degraded get/set
+    paths bypassed SessionStoreLock, racing disconnect's
+    clear(). Every cache path now runs under the one lock.
+  - A-F3 MEDIUM (connect): a cancelled connect() stranded
+    uiState in Working permanently (the authorization
+    collector refuses to sync while Working). connect()'s
+    finally now restores the pre-connect state whenever the
+    surface is still Working.
+  - A-F4 LOW–MEDIUM (disconnect): CancellationException was
+    swallowed by two runCatching layers and reported as an
+    ordinary revoke failure. DisconnectSequence now completes
+    the unconditional forget + unbind, then rethrows the
+    cancellation; the gateway attempt is cancellation-
+    transparent the same way.
+  - A-F5 MEDIUM (disconnect truth): deauthorize revoked the
+    token snapshotted BEFORE transact, but the SDK's
+    establish() silently re-authorizes and may rotate the
+    token first — the revoke could target a superseded token
+    in either direction. Now the SDK's prescribed form:
+    `transact { deauthorize(it.authToken) }`.
+  - FREEZE (both scopes): TransactionBuilder /
+    SettlementVerifier / MoneyConfig byte-identical to the
+    pin — PASS, no findings.
+  - **Candidate superseded:** the fixes touch the binary, so
+    the first signed candidate (run 41152940391, sha256
+    8181acae…) is superseded before sealing; tag v0.2.10 moves
+    to the fixed head and the release + runtime battery re-run
+    on the new artifact. Nothing was submitted from either.
+  - **Runtime battery #1 (run 41153494991, on the superseded
+    candidate — fixture intelligence for the re-run):** PASS
+    R1/R1b/R2/R3/R6/R4/R5/R8 (no-wallet cold start, offline,
+    migration prompt + reconnect, offline cache-only restore,
+    disconnect, config-change connect, concurrent connect =
+    exactly one sheet, render matrix filed). R7 FAIL is a
+    CELL defect: the script never verified `pm disable`
+    actually disabled the mock (output discarded); the wallet
+    session in the window completed normally, i.e. the
+    deauthorize succeeded and no residue note is the CORRECT
+    app behavior — the re-run verifies the premise or grades
+    FIXTURE-LIMITED. R11 FAIL is a CELL defect: all 21
+    IllegalStateExceptions attribute to Gboard / Settings /
+    media photopicker system processes, ZERO to
+    com.hindsight.app — the re-run counts only the app's own
+    pids. R9/R10 FIXTURE-LIMITED (the WebView game exposes no
+    uiautomator text — sign-in/buy controls unreachable by
+    this driver; harness proof carries the machinery, the
+    seal names the gap). R12 FIXTURE-LIMITED (no tcpdump on
+    the AVD). C-16 sandbox census was HOLLOW (run-as refuses
+    the non-debuggable release APK) — the re-run attempts the
+    root path on the AVD; the static census (stock cache
+    never constructed) stands meanwhile. C-27 renders
+    inspected firsthand: correct and legible at both sizes;
+    the app palette is dark by design in both SYSTEM themes
+    (dark-only scheme, unchanged from v0.2.8).
+
 ## 2026-10-27 — v0.2.8: UI-audit fix pass (bundle + version fields) — THE resubmission candidate
 
 One build pass carrying the combined findings of the two standing UI
