@@ -1,5 +1,7 @@
 # PATCH_NOTES — money-build-v0.2.0
 
+> **Registry binding (2026-10-29, ARCHIVIST §3):** this file is bound to the estate fault registry `~/workspace/dapp-store-work/KNOWN_FAULT_CLASSES.md` — **Registry v1.0** (launched 2026-10-29), cited by version stamp in every seal. Rows for this shell's ingredients are tracked there under the same IDs — a PATCH_NOTES row and a registry row are never two descriptions of one fault: **KFC-001** sender class (device-proved on this title 2026-10-27; cured v0.2.5; shipped v0.2.8 verified CURED on the binary) · **KFC-002** boundary takeover (PM not yet assessed) · **KFC-003** unguarded WebView (residue OPEN — GameScreen patch rides v0.2.9) · **KFC-004** locked account-level field (FILED + STAFF-CONFIRMED, read-back pending).
+
 ## 2026-10-27 — v0.2.8: UI-audit fix pass (bundle + version fields) — THE resubmission candidate
 
 One build pass carrying the combined findings of the two standing UI
