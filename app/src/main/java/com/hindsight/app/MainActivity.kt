@@ -58,7 +58,7 @@ class MainActivity : ComponentActivity() {
                         ) {
                             composable("splash") {
                                 SplashScreen(
-                                    onFinished = {
+                                    onDone = {
                                         navController.navigate("home") {
                                             popUpTo("splash") { inclusive = true }
                                         }
