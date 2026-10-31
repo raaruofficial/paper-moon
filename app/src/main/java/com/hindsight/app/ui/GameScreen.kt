@@ -44,6 +44,7 @@ import com.hindsight.app.PaperMoonApp
 import com.hindsight.app.game.GameConfig
 import com.hindsight.app.wallet.PaperMoonWalletBridge
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /**
@@ -80,6 +81,25 @@ fun GameScreen(navController: NavController, onExit: () -> Unit) {
         withContext(Dispatchers.IO) {
             runCatching {
                 app.reconcileCoordinator.reconcileOnLaunch(app.shellVerifier.boundIdentity)
+            }
+        }
+        // C-21 timed re-check: while the game surface lives and a
+        // no-signature outcome is open, re-run reconciliation on a
+        // slow timer — chain READS only; the sender is never
+        // re-called and nothing is re-sent. A match grants through
+        // the normal settle path; proven expiry closes the intent
+        // and re-opens purchase. The loop ends with the surface.
+        while (true) {
+            delay(30_000)
+            val open = runCatching {
+                app.purchaseFlow.unresolvedNoSignatureOutcomes().isNotEmpty()
+            }.getOrDefault(false)
+            if (open) {
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        app.reconcileCoordinator.reconcileOnLaunch(app.shellVerifier.boundIdentity)
+                    }
+                }
             }
         }
     }

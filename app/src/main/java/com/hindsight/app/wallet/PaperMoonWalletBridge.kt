@@ -3,6 +3,9 @@ package com.hindsight.app.wallet
 import androidx.activity.ComponentActivity
 import android.webkit.JavascriptInterface
 import com.hindsight.app.PaperMoonApp
+import com.hindsight.app.money.BlockhashProvider
+import com.hindsight.app.money.BuildContext
+import com.hindsight.app.money.BuildContextSource
 import com.hindsight.app.money.MoneyConfig
 import com.hindsight.app.money.PurchaseCoordinator
 import com.hindsight.app.money.PurchaseResult
@@ -11,6 +14,7 @@ import com.hindsight.app.money.SendOutcome
 import com.hindsight.app.money.ShellVerifier
 import com.hindsight.app.money.TxFailureKind
 import com.hindsight.app.money.WalletSender
+import com.hindsight.app.util.Base58
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -139,12 +143,22 @@ class PaperMoonWalletBridge(
     fun getEntitlement(): String {
         val identity = app.shellVerifier.boundIdentity
         val entitlement = app.entitlementLedger.entitlementFor(identity)
-        return JSONObject()
+        // C-21/C-23: an open unresolved (signature-less) outcome
+        // for the bound identity is VISIBLE state — the page can
+        // show the honest line while reconciliation runs; it is
+        // never hidden and never described as "failed".
+        val unresolved = app.purchaseFlow.unresolvedNoSignatureOutcomes()
+            .firstOrNull { it.buyerIdentity == identity }
+        val json = JSONObject()
             .put("bound", identity != null)
             .put("passActive", entitlement.passActive)
             .put("passExpiresAtMs", entitlement.passExpiresAtMs)
             .put("pending", entitlement.pendingSignature != null)
-            .put(
+            .put("paymentUnresolved", unresolved != null)
+        if (unresolved != null) {
+            json.put("unresolvedMessage", PurchaseCoordinator.UNRESOLVED_USER_MESSAGE)
+        }
+        return json.put(
                 "rookieClaimed",
                 if (identity != null) app.rookieLedger.hasClaimed(identity)
                 else app.rookieLedger.hasLocalGrant()
@@ -287,9 +301,14 @@ class PaperMoonWalletBridge(
                 flow = app.purchaseFlow,
                 ledger = app.entitlementLedger,
                 settlement = app.settlementVerifier,
-                blockhashProvider = app.rpcReader,
+                // C-21: the recording provider — the blockhash +
+                // lastValidBlockHeight stamped onto an unresolved
+                // intent are the BUILT transaction's, captured
+                // during the build itself.
+                blockhashProvider = RecordingBlockhashProvider(app.rpcReader),
                 walletSender = ConnectWalletSender(),
-                sheetConfirmer = app.purchaseSheetController
+                sheetConfirmer = app.purchaseSheetController,
+                noSignatureReconciler = app.noSignatureReconciler
             )
             val data = JSONObject()
             when (val result = coordinator.purchase(itemId, identity)) {
@@ -348,6 +367,14 @@ class PaperMoonWalletBridge(
                     data.put("state", "failed")
                     resolveErr(requestId, "not_bound: sign in to purchase", data)
                 }
+                is PurchaseResult.UnresolvedNoSignature -> {
+                    // C-21/C-23: the honest unresolved state — the
+                    // payment may already have been submitted; the
+                    // app is checking; no second charge can happen
+                    // meanwhile. Never "failed", never "not_bound".
+                    data.put("state", "unresolved")
+                    resolveErr(requestId, PurchaseCoordinator.UNRESOLVED_USER_MESSAGE, data)
+                }
             }
             postEntitlementChanged()
         }
@@ -376,16 +403,38 @@ class PaperMoonWalletBridge(
                     is ConnectWalletGateway.SendResult.Failed ->
                         SendOutcome.Failed(result.kind)
                     is ConnectWalletGateway.SendResult.Ambiguous ->
-                        // C-21 lands in the immediately following
-                        // commit of this build (same push): the
-                        // ambiguous outcome opens an
-                        // UNRESOLVED_NO_SIGNATURE intent instead of
-                        // closing as failed. Until that commit this
-                        // branch is unreachable in any sealed build.
-                        SendOutcome.Failed(TxFailureKind.OTHER)
+                        // C-21: the durable unresolved machinery —
+                        // the coordinator records an
+                        // UNRESOLVED_NO_SIGNATURE intent and plugs
+                        // it into the unresolved guard.
+                        SendOutcome.UnresolvedNoSignature(result.mappedKindName)
                 }
             }
         }
+    }
+
+    /**
+     * C-21 recording blockhash provider: delegates to the real
+     * reader's height-aware read and remembers the pair, so the
+     * coordinator stamps the BUILT transaction's own blockhash +
+     * lastValidBlockHeight onto an unresolved intent. If the
+     * height-aware read fails, the build fails closed exactly as
+     * before (null blockhash → build failure), and no unresolved
+     * intent can be stamped with invented values.
+     */
+    private class RecordingBlockhashProvider(
+        private val reader: com.hindsight.app.money.SolanaRpcChainReader
+    ) : BlockhashProvider, BuildContextSource {
+        @Volatile
+        private var last: BuildContext? = null
+
+        override fun recentBlockhash(): ByteArray? {
+            val pair = reader.recentBlockhashWithHeight() ?: return null
+            last = BuildContext(Base58.encode(pair.first), pair.second)
+            return pair.first
+        }
+
+        override fun lastBuildContext(): BuildContext? = last
     }
 
     // ------------------------------------------------------------------

@@ -48,11 +48,33 @@ fun interface SheetConfirmer {
 sealed interface SendOutcome {
     data class Sent(val signature: String) : SendOutcome
     data class Failed(val kind: TxFailureKind) : SendOutcome
+
+    /** The interaction ended WITHOUT a signature in the ambiguous
+     *  class (Gate 0 C-21): the transaction may already have been
+     *  submitted. [mappedKindName] is the sealed wallet error kind
+     *  name from the gateway's mapping table — never raw text. The
+     *  coordinator records a durable UNRESOLVED_NO_SIGNATURE
+     *  outcome; the purchase is never auto-retried and never
+     *  closed as failed on this evidence. */
+    data class UnresolvedNoSignature(val mappedKindName: String) : SendOutcome
 }
 
-/** The wallet seam: production is WalletManager (MWA 2.0). */
+/** The wallet seam: production is the Connect gateway's sender. */
 interface WalletSender {
     fun sendTransaction(serializedTransaction: ByteArray): SendOutcome
+}
+
+/** The build context of the most recent transaction build (C-21):
+ *  the exact blockhash the transaction was built with, and its
+ *  lastValidBlockHeight. A [BlockhashProvider] that also
+ *  implements this records the pair during the build so the
+ *  coordinator can stamp it onto an UNRESOLVED_NO_SIGNATURE
+ *  intent — the recorded values are the BUILT transaction's, by
+ *  construction, never a later re-read. */
+data class BuildContext(val blockhashBase58: String, val lastValidBlockHeight: Long)
+
+interface BuildContextSource {
+    fun lastBuildContext(): BuildContext?
 }
 
 /** Coordinator-level result of a purchase attempt. */
@@ -74,6 +96,12 @@ sealed interface PurchaseResult {
      *  was charged, the window was NOT refreshed, and the attempt
      *  was recorded as a non-delivery (Terms §7(b)). */
     data class DuplicateActivePass(val expiresAtMs: Long) : PurchaseResult
+
+    /** A signature-less ambiguous outcome is open for this buyer
+     *  (C-21): the payment is being reconciled against the chain
+     *  and NO new purchase may start meanwhile — the sender was
+     *  not called again and nothing was charged by this attempt. */
+    data class UnresolvedNoSignature(val outcome: PurchaseOutcome) : PurchaseResult
 
     data object RailClosed : PurchaseResult
     data object UnknownItem : PurchaseResult
@@ -113,7 +141,13 @@ class PurchaseCoordinator(
     private val walletSender: WalletSender,
     private val sheetConfirmer: SheetConfirmer,
     private val receivingWalletProvider: () -> String? =
-        { ReceivingWalletConfig.configuredReceivingWallet }
+        { ReceivingWalletConfig.configuredReceivingWallet },
+    /** C-21 no-signature reconciliation. Optional only so the
+     *  inert launch coordinator in tests can omit it — production
+     *  wiring (PaperMoonApp + the bridge) always supplies it; an
+     *  open no-signature outcome with no reconciler stays open
+     *  (fail-closed), it never falls through to a new charge. */
+    private val noSignatureReconciler: NoSignatureReconciler? = null
 ) {
     fun purchase(itemId: String, buyerIdentity: String?): PurchaseResult {
         if (buyerIdentity == null) return PurchaseResult.NotBound
@@ -130,6 +164,21 @@ class PurchaseCoordinator(
                     is PurchaseResult.Granted, is PurchaseResult.Pending -> return bound
                     else -> Unit
                 }
+            }
+
+        // (1b) No-signature unresolved guard (C-21 i): an open
+        // UNRESOLVED_NO_SIGNATURE outcome for this buyer plugs
+        // into the same guard — reconciliation is attempted; a
+        // match settles through the normal path and returns its
+        // outcome; proven non-submission (expiry) frees the buyer
+        // and falls through; anything else returns
+        // UnresolvedNoSignature WITHOUT minting an intent, without
+        // a sheet, and without calling the sender — a second
+        // charge cannot happen while the outcome is open.
+        flow.unresolvedNoSignatureOutcomes()
+            .firstOrNull { it.buyerIdentity == buyerIdentity }
+            ?.let { open ->
+                reconcileNoSignature(open)?.let { return it }
             }
 
         // (2) Duplicate guard (Terms §7(b); bankai #3 MAJOR-5): the
@@ -202,6 +251,33 @@ class PurchaseCoordinator(
                 )
                 PurchaseResult.Failed(errorClass)
             }
+            is SendOutcome.UnresolvedNoSignature -> {
+                // C-21: record the durable unresolved outcome with
+                // the full intent record (buyer, the BUILT
+                // transaction's blockhash + lastValidBlockHeight
+                // from the recording provider, amount/mint/
+                // recipient from shell-side config, the sealed
+                // error kind name, timestamp). Never auto-retried,
+                // never closed as failed here.
+                val ctx = (blockhashProvider as? BuildContextSource)?.lastBuildContext()
+                val outcome = PurchaseOutcome(
+                    idempotencyKey = key,
+                    state = PurchaseState.UNRESOLVED_NO_SIGNATURE,
+                    signature = null,
+                    errorClass = null,
+                    message = UNRESOLVED_USER_MESSAGE,
+                    buyerIdentity = buyerIdentity,
+                    blockhash = ctx?.blockhashBase58,
+                    lastValidBlockHeight = ctx?.lastValidBlockHeight,
+                    amountBaseUnits = MoneyConfig.PRICE_USDC_BASE_UNITS,
+                    mint = MoneyConfig.USDC_MINT,
+                    recipient = receivingWalletProvider(),
+                    walletErrorKind = sent.mappedKindName,
+                    createdAtMs = System.currentTimeMillis()
+                )
+                flow.recordOutcome(outcome)
+                PurchaseResult.UnresolvedNoSignature(outcome)
+            }
             is SendOutcome.Sent -> {
                 // The signature is recorded in the intent outcome
                 // FIRST, then journaled in the ledger. Either record
@@ -231,6 +307,40 @@ class PurchaseCoordinator(
                 }
                 settle(key, sent.signature, itemId, buyerIdentity)
             }
+        }
+    }
+
+    /**
+     * One reconciliation pass over an open UNRESOLVED_NO_SIGNATURE
+     * outcome (C-21 iii). Returns the [PurchaseResult] the caller
+     * must surface when the outcome resolves or must keep blocking
+     * (Matched → settle()'s result; StillOpen → the blocking
+     * UnresolvedNoSignature result), or null when proven
+     * non-submission closed the intent and the caller may proceed
+     * with a fresh purchase. Never calls the wallet sender; never
+     * retries the send.
+     */
+    fun reconcileNoSignature(outcome: PurchaseOutcome): PurchaseResult? {
+        val reconciler = noSignatureReconciler
+            ?: return PurchaseResult.UnresolvedNoSignature(outcome)
+        return when (val result = reconciler.reconcile(outcome)) {
+            is NoSignatureReconciler.Result.Matched -> {
+                val buyer = outcome.buyerIdentity
+                    ?: return PurchaseResult.UnresolvedNoSignature(outcome)
+                settle(outcome.idempotencyKey, result.signature, MoneyConfig.ITEM_DAY_PASS, buyer)
+            }
+            NoSignatureReconciler.Result.ExpiredUnmatched -> {
+                flow.recordOutcome(
+                    outcome.copy(
+                        state = PurchaseState.FAILED,
+                        errorClass = TxErrorClass.RPC_OR_CONFIRMATION_FAILURE,
+                        message = NOT_SUBMITTED_MESSAGE
+                    )
+                )
+                null
+            }
+            NoSignatureReconciler.Result.StillOpen ->
+                PurchaseResult.UnresolvedNoSignature(outcome)
         }
     }
 
@@ -320,6 +430,13 @@ class PurchaseCoordinator(
             if (buyer.isEmpty()) continue // unattributable: stays ACTIVE and visible in the journal
             settle(key, signature, item, buyer)
         }
+        // C-21: open no-signature outcomes reconcile in the same
+        // launch pass — a match grants through settle(), proven
+        // non-submission closes the intent, anything else stays
+        // open and keeps the guard.
+        flow.unresolvedNoSignatureOutcomes().forEach { outcome ->
+            reconcileNoSignature(outcome)
+        }
         return ledger.entitlementFor(boundIdentityHint)
     }
 
@@ -327,5 +444,21 @@ class PurchaseCoordinator(
         /** Non-delivery reason recorded for a purchase refused
          *  against an already-active pass (Terms §7(b)). */
         const val NON_DELIVERY_DUPLICATE_ACTIVE_PASS: String = "duplicate_active_pass"
+
+        /** C-23's user line for an open unresolved outcome: says
+         *  (a) the payment may already have been submitted, (b)
+         *  the app is checking, and (c) no second charge can
+         *  happen while it is checked. Never "payment failed",
+         *  never "nothing was charged". */
+        const val UNRESOLVED_USER_MESSAGE: String =
+            "Your wallet closed before confirming, so this payment may already have been " +
+                "submitted. We're checking the chain — no second charge can happen while we check."
+
+        /** The recorded message when non-submission is PROVEN by
+         *  block height (C-21 iii expiry close): only here may the
+         *  record say the payment was not submitted. */
+        const val NOT_SUBMITTED_MESSAGE: String =
+            "The payment was not submitted — its validity window passed with no matching " +
+                "payment on-chain. Nothing was charged; you can buy again."
     }
 }

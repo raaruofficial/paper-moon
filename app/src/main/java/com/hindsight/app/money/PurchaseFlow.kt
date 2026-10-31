@@ -22,7 +22,21 @@ enum class PurchaseState {
 
     /** Sent-but-unconfirmed at process death / unknown outcome.
      *  Reconciled before the launch gate reads entitlement (ENT-4). */
-    UNKNOWN
+    UNKNOWN,
+
+    /** The wallet interaction ended WITHOUT a signature in the
+     *  ambiguous class (Gate 0 C-21): the transaction may already
+     *  have been submitted, so this outcome is DURABLE and plugs
+     *  into the same unresolved guard as a sent signature — a
+     *  fresh purchase for the buyer cannot start, and the sender
+     *  is never called again for this intent, until reconciliation
+     *  either finds the payment on-chain (and settles it through
+     *  the normal grant path) or proves non-submission by block
+     *  height (the built transaction's lastValidBlockHeight has
+     *  passed with no matching transfer) and closes it. It is
+     *  never auto-retried and never closed as failed by the error
+     *  itself. */
+    UNRESOLVED_NO_SIGNATURE
 }
 
 /** The terminal (or replayable) outcome of a purchase intent.
@@ -35,7 +49,23 @@ data class PurchaseOutcome(
     val signature: String?,
     val errorClass: TxErrorClass?,
     val message: String,
-    val buyerIdentity: String? = null
+    val buyerIdentity: String? = null,
+    // C-21 intent-record fields (UNRESOLVED_NO_SIGNATURE records):
+    // everything reconciliation needs to find or exclude the
+    // payment later, captured at build time from shell-side
+    // values — the buyer, the built transaction's blockhash and
+    // lastValidBlockHeight, and the amount/mint/recipient from
+    // MoneyConfig and the receiving-wallet config. Null/absent in
+    // records written before C-21 and in non-C-21 states.
+    val blockhash: String? = null,
+    val lastValidBlockHeight: Long? = null,
+    val amountBaseUnits: Long? = null,
+    val mint: String? = null,
+    val recipient: String? = null,
+    /** The sealed wallet error kind NAME (e.g. "SESSION_CLOSED") —
+     *  never raw cause text (C-14). */
+    val walletErrorKind: String? = null,
+    val createdAtMs: Long = 0L
 )
 
 /**
@@ -112,8 +142,12 @@ class PurchaseFlow(
         val persisted = persistOutcome(outcome)
         if (outcome.state == PurchaseState.GRANTED ||
             outcome.state == PurchaseState.FAILED ||
-            outcome.state == PurchaseState.PENDING_SETTLEMENT
+            outcome.state == PurchaseState.PENDING_SETTLEMENT ||
+            outcome.state == PurchaseState.UNRESOLVED_NO_SIGNATURE
         ) {
+            // UNRESOLVED_NO_SIGNATURE releases the slot too: the
+            // durable outcome + the coordinator's guard — not this
+            // in-memory slot — is what stops a second charge.
             inFlight.values.remove(outcome.idempotencyKey)
         }
         return persisted
@@ -142,10 +176,27 @@ class PurchaseFlow(
             }
 
     /**
+     * Every open UNRESOLVED_NO_SIGNATURE outcome (C-21): the
+     * no-signature half of the unresolved guard. An outcome leaves
+     * this list only by settling (GRANTED via a found signature)
+     * or by the expiry close (FAILED, proven not-submitted) — the
+     * error that created it never closes it.
+     */
+    @Synchronized
+    fun unresolvedNoSignatureOutcomes(): List<PurchaseOutcome> =
+        store.keysWithPrefix(KEY_PREFIX)
+            .mapNotNull { store.get(it) }
+            .mapNotNull { decode(it) }
+            .filter { it.state == PurchaseState.UNRESOLVED_NO_SIGNATURE }
+
+    /**
      * Launch reconcile (ENT-4): any intent left in a non-terminal,
      * post-send state at process death becomes UNKNOWN, so the launch
      * gate fails closed with a visible recovery path until settlement
      * reconciliation resolves it. Returns the unknown outcomes.
+     * (UNRESOLVED_NO_SIGNATURE outcomes are already durable and
+     * self-describing; they are deliberately NOT rewritten here —
+     * the no-signature reconciler owns their resolution.)
      */
     @Synchronized
     fun reconcileOnLaunch(): List<PurchaseOutcome> {
@@ -178,6 +229,13 @@ class PurchaseFlow(
         .put("err", o.errorClass?.name ?: JSONObject.NULL)
         .put("msg", o.message)
         .put("buyer", o.buyerIdentity ?: JSONObject.NULL)
+        .put("bh", o.blockhash ?: JSONObject.NULL)
+        .put("lvbh", o.lastValidBlockHeight ?: JSONObject.NULL)
+        .put("amt", o.amountBaseUnits ?: JSONObject.NULL)
+        .put("mint", o.mint ?: JSONObject.NULL)
+        .put("rcpt", o.recipient ?: JSONObject.NULL)
+        .put("werr", o.walletErrorKind ?: JSONObject.NULL)
+        .put("ts", o.createdAtMs)
         .toString()
 
     private fun decode(raw: String): PurchaseOutcome? = runCatching {
@@ -188,7 +246,14 @@ class PurchaseFlow(
             signature = if (j.isNull("sig")) null else j.getString("sig"),
             errorClass = if (j.isNull("err")) null else TxErrorClass.valueOf(j.getString("err")),
             message = j.getString("msg"),
-            buyerIdentity = if (j.isNull("buyer")) null else j.getString("buyer")
+            buyerIdentity = if (j.isNull("buyer")) null else j.getString("buyer"),
+            blockhash = if (j.isNull("bh")) null else j.optString("bh").takeIf { it.isNotEmpty() },
+            lastValidBlockHeight = if (j.isNull("lvbh")) null else j.optLong("lvbh"),
+            amountBaseUnits = if (j.isNull("amt")) null else j.optLong("amt"),
+            mint = if (j.isNull("mint")) null else j.optString("mint").takeIf { it.isNotEmpty() },
+            recipient = if (j.isNull("rcpt")) null else j.optString("rcpt").takeIf { it.isNotEmpty() },
+            walletErrorKind = if (j.isNull("werr")) null else j.optString("werr").takeIf { it.isNotEmpty() },
+            createdAtMs = j.optLong("ts", 0L)
         )
     }.getOrNull()
 

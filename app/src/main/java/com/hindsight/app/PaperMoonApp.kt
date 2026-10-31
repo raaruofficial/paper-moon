@@ -58,6 +58,11 @@ class PaperMoonApp : Application() {
 
     val settlementVerifier: SettlementVerifier by lazy { SettlementVerifier(rpcReader) }
 
+    /** C-21 no-signature reconciliation over the same chain reader. */
+    val noSignatureReconciler: com.hindsight.app.money.NoSignatureReconciler by lazy {
+        com.hindsight.app.money.NoSignatureReconciler(rpcReader, settlementVerifier)
+    }
+
     val purchaseSheetController: PurchaseSheetController by lazy { PurchaseSheetController() }
 
     /** Coordinator used for launch reconciliation ONLY (ENT-4). Its
@@ -72,7 +77,8 @@ class PaperMoonApp : Application() {
                 override fun sendTransaction(serializedTransaction: ByteArray): SendOutcome =
                     SendOutcome.Failed(com.hindsight.app.money.TxFailureKind.OTHER)
             },
-            sheetConfirmer = com.hindsight.app.money.SheetConfirmer { false }
+            sheetConfirmer = com.hindsight.app.money.SheetConfirmer { false },
+            noSignatureReconciler = noSignatureReconciler
         )
     }
 }

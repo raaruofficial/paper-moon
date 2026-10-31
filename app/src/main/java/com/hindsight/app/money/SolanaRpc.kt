@@ -23,7 +23,7 @@ class SolanaRpcChainReader(
     private val endpoint: String = RpcConfig.ENDPOINT,
     private val receivingWalletProvider: () -> String? =
         { ReceivingWalletConfig.configuredReceivingWallet }
-) : ChainReader, BlockhashProvider {
+) : ChainReader, BlockhashProvider, NoSignatureReconciler.NoSignatureChainReader {
 
     override fun fetchTransaction(signature: String): ObservedTransaction? {
         val response = post(
@@ -68,7 +68,18 @@ class SolanaRpcChainReader(
         return ObservedTransaction(signature, foundAtCommitment = true, transfers = transfers, failed = failed)
     }
 
-    override fun recentBlockhash(): ByteArray? {
+    override fun recentBlockhash(): ByteArray? =
+        recentBlockhashWithHeight()?.first
+
+    /**
+     * The latest blockhash WITH its lastValidBlockHeight (C-21):
+     * the pair is recorded on an UNRESOLVED_NO_SIGNATURE intent at
+     * build time so reconciliation can later prove non-submission
+     * (current height > lastValidBlockHeight, no matching
+     * transfer). The frozen [BlockhashProvider] interface carries
+     * only the hash; this is the height-aware read beside it.
+     */
+    fun recentBlockhashWithHeight(): Pair<ByteArray, Long>? {
         val response = post(
             JSONObject()
                 .put("jsonrpc", "2.0")
@@ -78,7 +89,110 @@ class SolanaRpcChainReader(
         ) ?: return null
         val value = response.optJSONObject("result")?.optJSONObject("value") ?: return null
         val base58 = value.optString("blockhash").takeIf { it.isNotEmpty() } ?: return null
-        return runCatching { Base58.decode(base58) }.getOrNull()
+        val bytes = runCatching { Base58.decode(base58) }.getOrNull() ?: return null
+        if (!value.has("lastValidBlockHeight")) return null
+        return bytes to value.optLong("lastValidBlockHeight")
+    }
+
+    override fun signaturesForAddress(addressBase58: String, limit: Int): List<String>? {
+        val response = post(
+            JSONObject()
+                .put("jsonrpc", "2.0")
+                .put("id", 1)
+                .put("method", "getSignaturesForAddress")
+                .put(
+                    "params", JSONArray()
+                        .put(addressBase58)
+                        .put(
+                            JSONObject()
+                                .put("limit", limit)
+                                .put("commitment", SettlementVerifier.COMMITMENT)
+                        )
+                )
+        ) ?: return null
+        val result = response.optJSONArray("result") ?: return null
+        val out = ArrayList<String>(result.length())
+        for (i in 0 until result.length()) {
+            val entry = result.optJSONObject(i) ?: continue
+            // A failed transaction cannot be a payment: skip it.
+            if (!entry.isNull("err")) continue
+            val signature = entry.optString("signature")
+            if (signature.isNotEmpty()) out.add(signature)
+        }
+        return out
+    }
+
+    override fun currentBlockHeight(): Long? {
+        val response = post(
+            JSONObject()
+                .put("jsonrpc", "2.0")
+                .put("id", 1)
+                .put("method", "getBlockHeight")
+                .put("params", JSONArray().put(JSONObject().put("commitment", SettlementVerifier.COMMITMENT)))
+        ) ?: return null
+        if (response.isNull("result")) return null
+        return response.optLong("result", -1L).takeIf { it >= 0 }
+    }
+
+    override fun fetchTransferDetails(signature: String): List<ObservedTransferDetail>? {
+        val response = post(
+            JSONObject()
+                .put("jsonrpc", "2.0")
+                .put("id", 1)
+                .put("method", "getTransaction")
+                .put(
+                    "params", JSONArray()
+                        .put(signature)
+                        .put(
+                            JSONObject()
+                                .put("encoding", "jsonParsed")
+                                .put("commitment", SettlementVerifier.COMMITMENT)
+                                .put("maxSupportedTransactionVersion", 0)
+                        )
+                )
+        ) ?: return null
+        if (response.isNull("result")) return null
+        val meta = response.optJSONObject("result")?.optJSONObject("meta") ?: return null
+        if (!meta.isNull("err")) return emptyList() // failed tx: no payment happened
+        // Per-(owner, mint) deltas across EVERY token balance —
+        // unlike fetchTransaction (recipient-only, all settlement
+        // needs), reconciliation must see the source account too.
+        fun balances(array: JSONArray?): Map<Pair<String, String>, Long> {
+            if (array == null) return emptyMap()
+            val out = HashMap<Pair<String, String>, Long>()
+            for (i in 0 until array.length()) {
+                val entry = array.optJSONObject(i) ?: continue
+                val owner = entry.optString("owner")
+                val mint = entry.optString("mint")
+                val amount = entry.optJSONObject("uiTokenAmount")
+                    ?.optString("amount")?.toLongOrNull() ?: continue
+                if (owner.isEmpty() || mint.isEmpty()) continue
+                val key = owner to mint
+                out[key] = (out[key] ?: 0L) + amount
+            }
+            return out
+        }
+        val pre = balances(meta.optJSONArray("preTokenBalances"))
+        val post = balances(meta.optJSONArray("postTokenBalances"))
+        val negatives = ArrayList<Triple<String, String, Long>>() // owner, mint, amount>0
+        val positives = ArrayList<Triple<String, String, Long>>()
+        for (key in pre.keys + post.keys) {
+            val delta = (post[key] ?: 0L) - (pre[key] ?: 0L)
+            when {
+                delta < 0 -> negatives.add(Triple(key.first, key.second, -delta))
+                delta > 0 -> positives.add(Triple(key.first, key.second, delta))
+            }
+        }
+        val details = ArrayList<ObservedTransferDetail>()
+        val consumed = BooleanArray(negatives.size)
+        for ((toOwner, mint, amount) in positives) {
+            val idx = negatives.indices.firstOrNull { i ->
+                !consumed[i] && negatives[i].second == mint && negatives[i].third == amount
+            } ?: continue
+            consumed[idx] = true
+            details.add(ObservedTransferDetail(negatives[idx].first, toOwner, mint, amount))
+        }
+        return details
     }
 
     /**
