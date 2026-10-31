@@ -43,7 +43,6 @@ import androidx.navigation.NavController
 import com.hindsight.app.PaperMoonApp
 import com.hindsight.app.game.GameConfig
 import com.hindsight.app.wallet.PaperMoonWalletBridge
-import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -64,10 +63,9 @@ import kotlinx.coroutines.withContext
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun GameScreen(navController: NavController, sender: ActivityResultSender, onExit: () -> Unit) {
+fun GameScreen(navController: NavController, onExit: () -> Unit) {
     val context = LocalContext.current
     val activity = context as ComponentActivity
-    val walletManager = remember { (context.applicationContext as PaperMoonApp).walletManager }
     val app = remember { context.applicationContext as PaperMoonApp }
     // AC-04: the native purchase sheet. The coordinator publishes the
     // sheet here; the user decides on native UI the game page cannot
@@ -172,13 +170,13 @@ fun GameScreen(navController: NavController, sender: ActivityResultSender, onExi
                         }
                         val bridge = PaperMoonWalletBridge(
                             activity = activity,
-                            walletManager = walletManager,
-                            // v0.2.5 crash fix: the activity-owned
-                            // sender (created in MainActivity.onCreate,
-                            // pre-STARTED). The bridge must never
-                            // construct one here — this factory runs
-                            // during composition, at RESUMED.
-                            sender = sender,
+                            // C-17: the Application-scoped gateway,
+                            // constructed in MainActivity.onCreate
+                            // before setContent — never constructed
+                            // here (this factory runs during
+                            // composition, at RESUMED).
+                            gateway = (context.applicationContext as PaperMoonApp)
+                                .requireWalletGateway(),
                             evaluateJs = { js -> post { evaluateJavascript(js, null) } }
                         )
                         addJavascriptInterface(bridge, GameConfig.BRIDGE_NAME)

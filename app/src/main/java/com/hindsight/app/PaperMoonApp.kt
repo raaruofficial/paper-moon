@@ -12,14 +12,14 @@ import com.hindsight.app.money.ShellVerifier
 import com.hindsight.app.money.SolanaRpcChainReader
 import com.hindsight.app.money.WalletSender
 import com.hindsight.app.wallet.EncryptedPaperMoonStore
-import com.hindsight.app.wallet.WalletManager
-import com.hindsight.app.wallet.WalletTokenStore
+import com.hindsight.app.wallet.ConnectWalletGateway
 
 /**
  * Application holder for app-scoped singletons.
- * The [WalletManager] lives here so the wallet session survives navigation
- * and configuration changes. It is wired with a [WalletTokenStore] so the
- * MWA auth token persists across process death (T1-S03).
+ * The [ConnectWalletGateway] lives here (installed by MainActivity
+ * before setContent, Gate 0 C-17) so the wallet session survives
+ * navigation and configuration changes. Its authorization envelope
+ * persists in the encrypted store across process death (AC-02).
  *
  * Money build (v0.2.0): the shell's money components live here too —
  * the Shell Verifier (AC-01), the encrypted store (AC-02), the
@@ -34,9 +34,17 @@ class PaperMoonApp : Application() {
     /** The one encrypted store for token, entitlements, receipts, intents, claims. */
     val secureStore: EncryptedPaperMoonStore by lazy { EncryptedPaperMoonStore(this) }
 
-    val walletManager: WalletManager by lazy {
-        WalletManager(WalletTokenStore(secureStore))
-    }
+    /**
+     * The one wallet gateway (C-17): constructed exactly once per
+     * process by MainActivity.onCreate BEFORE setContent and
+     * installed here; Application-scoped thereafter. Null only
+     * before the first activity creates it.
+     */
+    @Volatile
+    var walletGateway: ConnectWalletGateway? = null
+
+    fun requireWalletGateway(): ConnectWalletGateway =
+        checkNotNull(walletGateway) { "wallet gateway not installed" }
 
     val shellVerifier: ShellVerifier by lazy { ShellVerifier() }
 

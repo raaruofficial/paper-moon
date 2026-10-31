@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- The game itself is fully offline. INTERNET exists for the
-         Mobile Wallet Adapter's local association channel, which uses
-         loopback sockets to hand off to the wallet app (T1-S25). -->
+    <!-- The game itself is fully offline. INTERNET serves exactly
+         two things: the local association channel to the wallet app
+         (loopback WebSocket, Seeker Connect's MWA link — Gate 0
+         C-11: the merged manifest and the resolved artifacts are
+         censused to prove no other socket exists) and the shell's
+         public-RPC reads for purchase settlement verification. The
+         page never gets the network (C-30 network silence). -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 

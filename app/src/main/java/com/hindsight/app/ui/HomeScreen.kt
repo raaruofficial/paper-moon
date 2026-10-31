@@ -36,7 +36,7 @@ import com.hindsight.app.wallet.WalletUiState
 @Composable
 fun HomeScreen(navController: NavController) {
     val app = LocalContext.current.applicationContext as PaperMoonApp
-    val walletState by app.walletManager.uiState.collectAsState()
+    val walletState by app.requireWalletGateway().uiState.collectAsState()
 
     Column(
         modifier = Modifier.fillMaxSize().padding(32.dp),

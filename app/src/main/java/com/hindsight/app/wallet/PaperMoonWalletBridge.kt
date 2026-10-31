@@ -11,7 +11,6 @@ import com.hindsight.app.money.SendOutcome
 import com.hindsight.app.money.ShellVerifier
 import com.hindsight.app.money.TxFailureKind
 import com.hindsight.app.money.WalletSender
-import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -57,20 +56,19 @@ import org.json.JSONObject
  */
 class PaperMoonWalletBridge(
     private val activity: ComponentActivity,
-    private val walletManager: WalletManager,
     /**
-     * The activity's single MWA sender, created by MainActivity in
-     * onCreate (v0.2.5 crash fix). This bridge used to construct its
-     * own `ActivityResultSender(activity)` as a property initializer;
-     * the bridge is assembled during composition, when the activity
-     * is RESUMED, and the sender's constructor registers an
-     * activity-result launcher — which AndroidX forbids at or after
-     * STARTED, so every PLAY press threw IllegalStateException
-     * (BUTTON_CRASH_DIAGNOSIS.md). The sender is now constructor-
-     * injected from the activity's pre-STARTED lifecycle and only
-     * ever *used* here, never constructed.
+     * The one wallet gateway (Gate 0 C-17), constructed by
+     * MainActivity in onCreate before setContent and
+     * Application-scoped. The v0.2.5 crash class — a wallet
+     * collaborator constructed during composition, at RESUMED,
+     * registering an activity-result launcher AndroidX forbids at
+     * or after STARTED (BUTTON_CRASH_DIAGNOSIS.md) — stays closed
+     * by construction: this bridge constructs nothing
+     * lifecycle-bound; it only ever *uses* the gateway, whose own
+     * wallet calls run inside the host activity's lifecycleScope
+     * (C-20) with the SDK's per-call registration (v029 audit A3).
      */
-    private val sender: ActivityResultSender,
+    private val gateway: ConnectWalletGateway,
     private val evaluateJs: (script: String) -> Unit
 ) {
     private val app = activity.applicationContext as PaperMoonApp
@@ -100,11 +98,11 @@ class PaperMoonWalletBridge(
     fun getVersion(): String = "2"
 
     @JavascriptInterface
-    fun isConnected(): Boolean = walletManager.isConnected
+    fun isConnected(): Boolean = gateway.isConnected
 
     /** Base58 wallet address, or "" when not connected. */
     @JavascriptInterface
-    fun getPublicKey(): String = walletManager.publicKeyBase58 ?: ""
+    fun getPublicKey(): String = gateway.connectedPublicKey() ?: ""
 
     /** The AC-01 bound identity (Base58), or "" when unbound. Binding
      *  is established only by a verified shell challenge — connecting
@@ -171,7 +169,7 @@ class PaperMoonWalletBridge(
     @JavascriptInterface
     fun connectWallet(requestId: String): String {
         scope.launch {
-            walletManager.connect(sender).fold(
+            gateway.connect().fold(
                 onSuccess = { pubkey ->
                     resolveOk(requestId, JSONObject().put("publicKey", pubkey))
                 },
@@ -193,13 +191,13 @@ class PaperMoonWalletBridge(
     @JavascriptInterface
     fun requestSignIn(requestId: String): String {
         scope.launch(Dispatchers.IO) {
-            val pubkey = walletManager.publicKeyBase58
+            val pubkey = gateway.connectedPublicKey()
             if (pubkey == null) {
                 resolveErr(requestId, "not_connected: connect a wallet before sign-in")
                 return@launch
             }
             val challenge = app.shellVerifier.issueChallenge()
-            walletManager.signShellChallenge(sender, challenge.payload).fold(
+            gateway.signShellChallenge(challenge.payload).fold(
                 onSuccess = { signature ->
                     when (val result = app.shellVerifier.verifyAndBind(challenge.handle, pubkey, signature)) {
                         is ShellVerifier.BindResult.Bound ->
@@ -290,7 +288,7 @@ class PaperMoonWalletBridge(
                 ledger = app.entitlementLedger,
                 settlement = app.settlementVerifier,
                 blockhashProvider = app.rpcReader,
-                walletSender = MwaWalletSender(),
+                walletSender = ConnectWalletSender(),
                 sheetConfirmer = app.purchaseSheetController
             )
             val data = JSONObject()
@@ -357,28 +355,35 @@ class PaperMoonWalletBridge(
     }
 
     /** Wallet sender for the coordinator: preflight balance (the
-     *  INSUFFICIENT_FUNDS class), then the real MWA sign-and-send.
-     *  Runs on the coordinator's IO thread; the manager call is
-     *  bridged with runBlocking because MWA is suspend-based. */
-    private inner class MwaWalletSender : WalletSender {
+     *  INSUFFICIENT_FUNDS class), then the real sign-and-send
+     *  through the gateway. Runs on the coordinator's IO thread;
+     *  the gateway call is bridged with runBlocking — the blocking
+     *  wait is on the gateway operation, which itself completes
+     *  from the host activity's lifecycleScope deferred (C-20),
+     *  never on the SDK session directly. */
+    private inner class ConnectWalletSender : WalletSender {
         override fun sendTransaction(serializedTransaction: ByteArray): SendOutcome {
-            val buyer = walletManager.publicKeyBase58 ?: return SendOutcome.Failed(TxFailureKind.WALLET_NO_WALLET_FOUND)
+            val buyer = gateway.connectedPublicKey()
+                ?: return SendOutcome.Failed(TxFailureKind.WALLET_NO_WALLET_FOUND)
             val balance = runCatching { app.rpcReader.usdcBalanceBaseUnits(buyer) }.getOrNull()
             if (balance != null && balance < MoneyConfig.PRICE_USDC_BASE_UNITS) {
                 return SendOutcome.Failed(TxFailureKind.INSUFFICIENT_BALANCE_PREFLIGHT)
             }
             return runBlocking {
-                walletManager.signAndSendTransactions(sender, listOf(serializedTransaction)).fold(
-                    onSuccess = { signatures ->
-                        signatures.firstOrNull()?.let { SendOutcome.Sent(it) }
-                            ?: SendOutcome.Failed(TxFailureKind.OTHER)
-                    },
-                    onFailure = { e ->
-                        SendOutcome.Failed(
-                            (e as? WalletUiException)?.failureKind ?: TxFailureKind.OTHER
-                        )
-                    }
-                )
+                when (val result = gateway.signAndSendTransactions(serializedTransaction)) {
+                    is ConnectWalletGateway.SendResult.Sent ->
+                        SendOutcome.Sent(result.signatureBase58)
+                    is ConnectWalletGateway.SendResult.Failed ->
+                        SendOutcome.Failed(result.kind)
+                    is ConnectWalletGateway.SendResult.Ambiguous ->
+                        // C-21 lands in the immediately following
+                        // commit of this build (same push): the
+                        // ambiguous outcome opens an
+                        // UNRESOLVED_NO_SIGNATURE intent instead of
+                        // closing as failed. Until that commit this
+                        // branch is unreachable in any sealed build.
+                        SendOutcome.Failed(TxFailureKind.OTHER)
+                }
             }
         }
     }

@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
@@ -16,59 +17,89 @@ import com.hindsight.app.ui.SettingsScreen
 import com.hindsight.app.ui.SplashScreen
 import com.hindsight.app.ui.WalletScreen
 import com.hindsight.app.ui.theme.PaperMoonTheme
-import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
+import com.hindsight.app.wallet.ConnectWalletGateway
+import com.solanamobile.seekerconnect.compose.SeekerConnectDialogState
+import com.solanamobile.seekerconnect.compose.SeekerConnectDialogs
 
-/**
- * Single-activity app. All navigation is native Compose Navigation —
- * the WebView is confined to the game screen and never drives app flow.
- */
 class MainActivity : ComponentActivity() {
 
     /**
-     * The app's single MWA activity-result sender (v0.2.5 crash fix).
-     * [ActivityResultSender] registers an activity-result launcher in
-     * its constructor, and AndroidX permits registration only before
-     * the owner lifecycle reaches STARTED — so the sender is created
-     * here, in onCreate before setContent, and shared with the game
-     * screen's wallet bridge and the wallet screen. The pre-fix build
-     * constructed senders during composition (the bridge's property
-     * initializer and a `remember{}` in the wallet screen), when the
-     * activity is already RESUMED; registration threw
-     * IllegalStateException and every PLAY / WALLET press crashed
-     * (BUTTON_CRASH_DIAGNOSIS.md, 2026-10-27).
+     * The one wallet gateway (Gate 0 C-17): constructed in
+     * [onCreate] BEFORE [setContent] — the v0.2.5 crash class was
+     * an uninitialized wallet collaborator reached from composition;
+     * construction here cannot regress to it — and installed on
+     * [PaperMoonApp] so an activity recreation within the process
+     * reuses the same instance (exactly one SeekerConnect per
+     * process). There is deliberately no app-owned
+     * ActivityResultSender and no registerForActivityResult
+     * anywhere in this app: result registration is the SDK's,
+     * per call (v029 audit A3).
      */
-    lateinit var activityResultSender: ActivityResultSender
-        private set
+    private lateinit var gateway: ConnectWalletGateway
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        activityResultSender = ActivityResultSender(this)
+        val app = applicationContext as PaperMoonApp
+        gateway = app.walletGateway ?: ConnectWalletGateway(
+            context = this,
+            store = app.secureStore,
+            shellVerifier = app.shellVerifier,
+            dialogState = SeekerConnectDialogState()
+        ).also { app.walletGateway = it }
         enableEdgeToEdge()
         setContent {
             PaperMoonTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    val navController = rememberNavController()
-                    NavHost(navController = navController, startDestination = "splash") {
-                        composable("splash") {
-                            SplashScreen(onDone = {
-                                navController.navigate("home") {
-                                    popUpTo("splash") { inclusive = true }
-                                }
-                            })
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        val navController = rememberNavController()
+                        NavHost(
+                            navController = navController,
+                            startDestination = "splash"
+                        ) {
+                            composable("splash") {
+                                SplashScreen(
+                                    onFinished = {
+                                        navController.navigate("home") {
+                                            popUpTo("splash") { inclusive = true }
+                                        }
+                                    }
+                                )
+                            }
+                            composable("home") { HomeScreen(navController) }
+                            composable("game") {
+                                GameScreen(
+                                    navController = navController,
+                                    onExit = { navController.popBackStack() }
+                                )
+                            }
+                            composable("wallet") { WalletScreen(navController) }
+                            composable("settings") { SettingsScreen(navController) }
                         }
-                        composable("home") { HomeScreen(navController) }
-                        composable("game") {
-                            GameScreen(
-                                navController = navController,
-                                sender = activityResultSender,
-                                onExit = { navController.popBackStack() }
-                            )
-                        }
-                        composable("wallet") { WalletScreen(navController, activityResultSender) }
-                        composable("settings") { SettingsScreen(navController) }
+                        // C-18: the Connect dialogs mount at the
+                        // single composition root, ABOVE both the
+                        // native wallet surface and the game — an
+                        // interaction started from either surface
+                        // renders its progress/error here.
+                        // darkTheme is pinned: the shell is
+                        // dark-only, and the SDK dialog must render
+                        // identically in both system themes (C-27).
+                        SeekerConnectDialogs(gateway.dialogState, darkTheme = true)
                     }
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // C-17 current-activity provider: weak reference, set here.
+        if (::gateway.isInitialized) gateway.activityResumed(this)
+    }
+
+    override fun onPause() {
+        // Cleared only when identity-equal (handled gateway-side),
+        // so a predecessor's onPause cannot clobber a successor.
+        if (::gateway.isInitialized) gateway.activityPaused(this)
+        super.onPause()
     }
 }
