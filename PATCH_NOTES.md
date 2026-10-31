@@ -350,7 +350,11 @@ Branch `feature/v0210-seeker-connect` from the v0.2.8 source pin
     FIXTURE-LIMITED (WebView hierarchy); R7 FAIL with the
     cell-defect signature above (occluded dump +
     post-re-entry dump); the cured cell re-runs as
-    battery #4 (run 41166615320). 0 FATALs. **C-16
+    battery #4 (run 41166615320; attempt 1's battery step
+    wedged on the runner for >2 h against battery #3's
+    19 min for the identical suite — cancelled and re-run
+    on a fresh runner as attempt 2, same commit, same
+    binary). 0 FATALs. **C-16
     sandbox census PASS at runtime:** via the root path
     on the AVD, SeekerConnectAuthorizationCache.xml is
     ABSENT in the before-connect and after-disconnect
