@@ -152,11 +152,102 @@ class SolanaRpcChainReader(
                 )
         ) ?: return null
         if (response.isNull("result")) return null
-        val meta = response.optJSONObject("result")?.optJSONObject("meta") ?: return null
+        val result = response.optJSONObject("result") ?: return null
+        return extractTransferDetails(result)
+    }
+
+    /**
+     * Pure extraction of all-owner transfer details from a
+     * getTransaction (jsonParsed) RESULT object — factored out of
+     * [fetchTransferDetails] so the money harness exercises it
+     * against fabricated transactions with no network.
+     *
+     * PRIMARY: the transaction's parsed instructions (outer +
+     * inner) name each transfer leg exactly — source and
+     * destination token accounts resolved to owners through the
+     * token-balance table. Aggregated balance deltas are NEVER
+     * paired across legs by amount: when two legs of the same
+     * mint and amount collide, amount-pairing can fabricate a
+     * transfer that never happened (TEKKADAN audit F3) — and a
+     * fabricated buyer→recipient detail here grants a pass paid
+     * for by a stranger. A transfer instruction whose accounts
+     * cannot be resolved makes the whole read inconclusive
+     * (null), never partially conclusive.
+     *
+     * FALLBACK (no parsed transfer instructions at all): delta
+     * pairing only where it is unambiguous — a (mint, amount)
+     * group with exactly one negative and one positive delta.
+     * Any group with both sides present but not exactly 1-to-1
+     * returns null (inconclusive), which the reconciler treats
+     * as still-open, never as no-match.
+     */
+    internal fun extractTransferDetails(result: JSONObject): List<ObservedTransferDetail>? {
+        val meta = result.optJSONObject("meta") ?: return null
         if (!meta.isNull("err")) return emptyList() // failed tx: no payment happened
-        // Per-(owner, mint) deltas across EVERY token balance —
-        // unlike fetchTransaction (recipient-only, all settlement
-        // needs), reconciliation must see the source account too.
+        // Token account pubkey -> (owner, mint), from the balance
+        // table (an account appears there iff the transaction
+        // touched it, pre and/or post).
+        val accountKeys = result.optJSONObject("transaction")
+            ?.optJSONObject("message")?.optJSONArray("accountKeys")
+        fun accountPubkey(index: Int): String? =
+            accountKeys?.optJSONObject(index)?.optString("pubkey")?.takeIf { it.isNotEmpty() }
+        val accountInfo = HashMap<String, Pair<String, String>>()
+        for (balances in listOf(meta.optJSONArray("preTokenBalances"), meta.optJSONArray("postTokenBalances"))) {
+            if (balances == null) continue
+            for (i in 0 until balances.length()) {
+                val entry = balances.optJSONObject(i) ?: continue
+                val pubkey = accountPubkey(entry.optInt("accountIndex", -1)) ?: continue
+                val owner = entry.optString("owner")
+                val mint = entry.optString("mint")
+                if (owner.isNotEmpty() && mint.isNotEmpty()) accountInfo[pubkey] = owner to mint
+            }
+        }
+        val details = ArrayList<ObservedTransferDetail>()
+        var sawTransfer = false
+        var unresolvedTransfer = false
+        fun scanInstructions(instructions: JSONArray?) {
+            if (instructions == null) return
+            for (i in 0 until instructions.length()) {
+                val parsed = instructions.optJSONObject(i)?.optJSONObject("parsed") ?: continue
+                val type = parsed.optString("type")
+                if (type != "transfer" && type != "transferChecked") continue
+                sawTransfer = true
+                val info = parsed.optJSONObject("info")
+                val source = info?.optString("source")?.takeIf { it.isNotEmpty() }
+                val destination = info?.optString("destination")?.takeIf { it.isNotEmpty() }
+                val amount = if (type == "transferChecked") {
+                    info?.optJSONObject("tokenAmount")?.optString("amount")?.toLongOrNull()
+                } else {
+                    info?.optString("amount")?.toLongOrNull()
+                }
+                val mint = if (type == "transferChecked") {
+                    info?.optString("mint")?.takeIf { it.isNotEmpty() }
+                } else {
+                    source?.let { accountInfo[it]?.second }
+                }
+                val fromOwner = source?.let { accountInfo[it]?.first }
+                val toOwner = destination?.let { accountInfo[it]?.first }
+                if (amount == null || mint == null || fromOwner == null || toOwner == null) {
+                    unresolvedTransfer = true
+                    continue
+                }
+                details.add(ObservedTransferDetail(fromOwner, toOwner, mint, amount))
+            }
+        }
+        scanInstructions(
+            result.optJSONObject("transaction")?.optJSONObject("message")?.optJSONArray("instructions")
+        )
+        val inner = meta.optJSONArray("innerInstructions")
+        if (inner != null) {
+            for (i in 0 until inner.length()) {
+                scanInstructions(inner.optJSONObject(i)?.optJSONArray("instructions"))
+            }
+        }
+        if (unresolvedTransfer) return null
+        if (sawTransfer) return details
+        // FALLBACK: per-(owner, mint) deltas, paired only where
+        // the pairing is forced (exactly one negative and one
+        // positive in the (mint, amount) group).
         fun balances(array: JSONArray?): Map<Pair<String, String>, Long> {
             if (array == null) return emptyMap()
             val out = HashMap<Pair<String, String>, Long>()
@@ -174,25 +265,22 @@ class SolanaRpcChainReader(
         }
         val pre = balances(meta.optJSONArray("preTokenBalances"))
         val post = balances(meta.optJSONArray("postTokenBalances"))
-        val negatives = ArrayList<Triple<String, String, Long>>() // owner, mint, amount>0
-        val positives = ArrayList<Triple<String, String, Long>>()
+        val negatives = HashMap<Pair<String, Long>, MutableList<String>>() // (mint, amount) -> owners
+        val positives = HashMap<Pair<String, Long>, MutableList<String>>()
         for (key in pre.keys + post.keys) {
             val delta = (post[key] ?: 0L) - (pre[key] ?: 0L)
             when {
-                delta < 0 -> negatives.add(Triple(key.first, key.second, -delta))
-                delta > 0 -> positives.add(Triple(key.first, key.second, delta))
+                delta < 0 -> negatives.getOrPut(key.second to -delta) { ArrayList() }.add(key.first)
+                delta > 0 -> positives.getOrPut(key.second to delta) { ArrayList() }.add(key.first)
             }
         }
-        val details = ArrayList<ObservedTransferDetail>()
-        val consumed = BooleanArray(negatives.size)
-        for ((toOwner, mint, amount) in positives) {
-            val idx = negatives.indices.firstOrNull { i ->
-                !consumed[i] && negatives[i].second == mint && negatives[i].third == amount
-            } ?: continue
-            consumed[idx] = true
-            details.add(ObservedTransferDetail(negatives[idx].first, toOwner, mint, amount))
+        val out = ArrayList<ObservedTransferDetail>()
+        for ((group, fromOwners) in negatives) {
+            val toOwners = positives[group] ?: continue
+            if (fromOwners.size != 1 || toOwners.size != 1) return null // ambiguous: inconclusive
+            out.add(ObservedTransferDetail(fromOwners.single(), toOwners.single(), group.first, group.second))
         }
-        return details
+        return out
     }
 
     /**

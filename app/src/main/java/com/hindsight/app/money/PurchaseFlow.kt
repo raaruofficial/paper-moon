@@ -140,14 +140,21 @@ class PurchaseFlow(
             return true
         }
         val persisted = persistOutcome(outcome)
-        if (outcome.state == PurchaseState.GRANTED ||
-            outcome.state == PurchaseState.FAILED ||
-            outcome.state == PurchaseState.PENDING_SETTLEMENT ||
-            outcome.state == PurchaseState.UNRESOLVED_NO_SIGNATURE
+        if (persisted &&
+            (outcome.state == PurchaseState.GRANTED ||
+                outcome.state == PurchaseState.FAILED ||
+                outcome.state == PurchaseState.PENDING_SETTLEMENT ||
+                outcome.state == PurchaseState.UNRESOLVED_NO_SIGNATURE)
         ) {
             // UNRESOLVED_NO_SIGNATURE releases the slot too: the
             // durable outcome + the coordinator's guard — not this
             // in-memory slot — is what stops a second charge.
+            //
+            // The release is conditioned on the write having
+            // LANDED (TEKKADAN audit F4): if the durable record
+            // failed, no guard exists after this process, so the
+            // in-memory slot stays held and the buyer fails closed
+            // in-process (AlreadyInFlight) instead of free.
             inFlight.values.remove(outcome.idempotencyKey)
         }
         return persisted
@@ -188,6 +195,25 @@ class PurchaseFlow(
             .mapNotNull { store.get(it) }
             .mapNotNull { decode(it) }
             .filter { it.state == PurchaseState.UNRESOLVED_NO_SIGNATURE }
+
+    /**
+     * Intents stranded by process death mid-send (TEKKADAN audit
+     * F2): [reconcileOnLaunch] rewrote them UNKNOWN, and they
+     * carry no signature. UNKNOWN-without-signature can arise
+     * ONLY from AWAITING_WALLET — PENDING_SETTLEMENT always
+     * carries its signature, and INTENT_CREATED is never
+     * rewritten — so these are exactly the purchases that reached
+     * the wallet and never produced an outcome. No signature
+     * guard can cover them; the coordinator converts them into
+     * the no-signature machinery (UNRESOLVED_NO_SIGNATURE) at
+     * launch reconciliation so the guard covers them there.
+     */
+    @Synchronized
+    fun strandedNoSignatureOutcomes(): List<PurchaseOutcome> =
+        store.keysWithPrefix(KEY_PREFIX)
+            .mapNotNull { store.get(it) }
+            .mapNotNull { decode(it) }
+            .filter { it.state == PurchaseState.UNKNOWN && it.signature == null }
 
     /**
      * Launch reconcile (ENT-4): any intent left in a non-terminal,

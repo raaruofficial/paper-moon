@@ -67,8 +67,14 @@ class ConnectAuthorizationCache(
     private var degradedToMemory: Boolean = false
 
     override suspend fun get(): StoredAuthorization? {
-        if (degradedToMemory) return memoryFallback
+        // EVERY path under the one lock (TEKKADAN audit A-F2):
+        // the degraded branches below are exactly where the
+        // in-memory copy is authoritative, and an unlocked read
+        // or write there races clear() — the SDK calls set() from
+        // its transact coroutine on every wallet interaction
+        // while disconnect's clear() runs on the UI coroutine.
         synchronized(SessionStoreLock) {
+            if (degradedToMemory) return memoryFallback
             val raw = store.get(KEY) ?: return null
             val parsed = decode(raw)
             if (parsed == null) {
@@ -82,14 +88,21 @@ class ConnectAuthorizationCache(
     }
 
     override suspend fun set(authorization: StoredAuthorization) {
-        if (degradedToMemory) {
-            memoryFallback = authorization
-            return
-        }
         synchronized(SessionStoreLock) {
+            if (degradedToMemory) {
+                memoryFallback = authorization
+                return
+            }
             val persisted = store.put(KEY, encode(authorization))
             if (!persisted) {
                 // Law 4: degrade to in-memory-only for the process.
+                // The superseded durable envelope is EVICTED
+                // first (TEKKADAN audit A-F1): if it stayed, the
+                // next process would restore the OLD authorization
+                // — the masking that hides it is process-volatile,
+                // so a failed re-save would silently resurrect
+                // the wallet the user just replaced.
+                store.remove(KEY)
                 degradedToMemory = true
                 memoryFallback = authorization
             }

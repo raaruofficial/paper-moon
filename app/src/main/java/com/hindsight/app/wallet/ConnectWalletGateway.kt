@@ -23,6 +23,8 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -187,6 +189,7 @@ class ConnectWalletGateway(
         if (!connectInFlight.compareAndSet(false, true)) {
             return Result.failure(WalletUiException(CONNECT_IN_PROGRESS_MESSAGE))
         }
+        val priorPublicKey = connectedPublicKey()
         return try {
             ui.value = WalletUiState.Working
             val auth = withWalletActivity { activity -> client.connect(activity) }
@@ -206,6 +209,15 @@ class ConnectWalletGateway(
             fail(row.userMessage, row.failureKind)
         } finally {
             connectInFlight.set(false)
+            // TEKKADAN audit A-F3: never strand the surface in
+            // Working. The authorization collector refuses to
+            // sync while Working, so a Working state left behind
+            // by a cancelled connect would be permanent for the
+            // process. Success (Connected) and failure (Error)
+            // states are deliberate and are left untouched.
+            if (ui.value is WalletUiState.Working) {
+                restoreConnectedState(priorPublicKey)
+            }
         }
     }
 
@@ -284,7 +296,19 @@ class ConnectWalletGateway(
                 SendResult.Failed(TxFailureKind.OTHER)
             }
         } catch (e: CancellationException) {
-            throw e
+            // C-21 (TEKKADAN audit F2): distinguish WHO cancelled.
+            // If our own caller's scope is dead, ensureActive
+            // rethrows and structured cancellation wins. If the
+            // caller is alive, the cancellation came from the
+            // wallet side of the seam — the host activity was
+            // destroyed mid-send and its lifecycleScope cancelled
+            // the deferred being awaited — and whether the
+            // transaction was submitted is genuinely unknown:
+            // the ambiguous class. Rethrowing here previously let
+            // the exception escape the WalletSender seam entirely,
+            // so no outcome was recorded and the intent stranded.
+            currentCoroutineContext().ensureActive()
+            SendResult.Ambiguous(SeekerConnectException.Code.CANCELLED.name)
         } catch (e: WalletUnavailableException) {
             SendResult.Failed(TxFailureKind.OTHER)
         } catch (e: SeekerConnectException) {
@@ -294,6 +318,12 @@ class ConnectWalletGateway(
             } else {
                 SendResult.Failed(row.failureKind ?: TxFailureKind.OTHER)
             }
+        } catch (e: Exception) {
+            // An unclassified failure escaping the SDK mid-send
+            // is not in the certainly-not-submitted set (C-14 /
+            // C-21): ambiguous — recorded, guarded, and resolved
+            // from chain evidence, never silently escaped.
+            SendResult.Ambiguous(SeekerConnectException.Code.WALLET_ERROR.name)
         } finally {
             restoreConnectedState(priorPublicKey)
         }
@@ -317,33 +347,59 @@ class ConnectWalletGateway(
      * background.
      */
     suspend fun disconnect(): DisconnectOutcome {
-        val token = client.authorization.value?.authToken
+        // Presence check only: whether ANY authorization is held.
+        // The token actually revoked is the one the transact
+        // session establishes (see the attempt below).
+        val hasAuthorization = client.authorization.value != null
         val activity = liveActivity()
-        val revoked = DisconnectSequence.run(
-            attemptDeauthorize = {
-                when {
-                    // No token held: no wallet-side residue exists
-                    // to revoke — the revoke is vacuously complete.
-                    token == null -> true
-                    activity == null -> false
-                    else -> runCatching {
-                        activity.lifecycleScope.async {
-                            client.transact(activity) { deauthorize(token) }
-                        }.await()
-                        true
-                    }.getOrDefault(false)
-                }
-            },
-            forgetLocally = {
-                runCatching { client.disconnect() }
-                // Belt and braces under the same lock discipline:
-                // the envelope key is gone even if the SDK's own
-                // forget path is interrupted.
-                runCatching { cache.clear() }
-            },
-            unbind = { shellVerifier.unbind() }
-        )
-        ui.value = WalletUiState.Disconnected
+        val revoked = try {
+            DisconnectSequence.run(
+                attemptDeauthorize = {
+                    when {
+                        // No authorization held: no wallet-side
+                        // residue exists to revoke — the revoke is
+                        // vacuously complete.
+                        !hasAuthorization -> true
+                        activity == null -> false
+                        else -> try {
+                            activity.lifecycleScope.async {
+                                // Revoke the token the session
+                                // ESTABLISHES, not a pre-transact
+                                // snapshot (TEKKADAN audit A-F5):
+                                // establish() silently re-authorizes
+                                // and may rotate the token before
+                                // this block runs; the SDK's own
+                                // prescribed form is
+                                // `transact { deauthorize(it.authToken) }`.
+                                client.transact(activity) { deauthorize(it.authToken) }
+                            }.await()
+                            true
+                        } catch (e: CancellationException) {
+                            // Honoured, never converted into a
+                            // revoke verdict (audit A-F4):
+                            // DisconnectSequence completes the
+                            // forget + unbind, then rethrows.
+                            throw e
+                        } catch (e: Exception) {
+                            false
+                        }
+                    }
+                },
+                forgetLocally = {
+                    runCatching { client.disconnect() }
+                    // Belt and braces under the same lock discipline:
+                    // the envelope key is gone even if the SDK's own
+                    // forget path is interrupted.
+                    runCatching { cache.clear() }
+                },
+                unbind = { shellVerifier.unbind() }
+            )
+        } finally {
+            // The local forget ran (DisconnectSequence guarantees
+            // it even on cancellation): the surface truth is
+            // Disconnected whatever the revoke's fate was.
+            ui.value = WalletUiState.Disconnected
+        }
         return DisconnectOutcome(revoked)
     }
 

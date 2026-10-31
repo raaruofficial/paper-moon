@@ -22,7 +22,16 @@ package com.hindsight.app.money
  *    recorded lastValidBlockHeight with no match, the built
  *    transaction can never land — non-submission is PROVEN, and
  *    the coordinator closes the intent FAILED (not-submitted) and
- *    re-opens purchase.
+ *    re-opens purchase. The proof requires a CONCLUSIVE scan:
+ *    every candidate was definitively evaluated (a final verdict,
+ *    or VERIFIED with its transfer details actually read) and
+ *    none matched. An inconclusive candidate — an unreadable
+ *    signature list, a non-final verdict (NOT_FOUND /
+ *    RPC_UNREACHABLE / RAIL_UNCONFIGURED), or a VERIFIED
+ *    candidate whose details could not be read — leaves the
+ *    intent OPEN however far past the validity height the chain
+ *    has moved: "no match found" is not "no match exists"
+ *    (TEKKADAN audit F1, 2026-10-30).
  *  - Anything else — chain unreadable, height unknown, no match
  *    yet inside the validity window — stays OPEN. Fail-closed:
  *    an unreadable chain never closes an intent and never grants.
@@ -65,20 +74,41 @@ class NoSignatureReconciler(
         val mint = outcome.mint ?: return Result.StillOpen
         val amount = outcome.amountBaseUnits ?: return Result.StillOpen
 
+        // An unreadable signature list proves nothing either way:
+        // the scan never ran, so expiry can never fire on it.
         val candidates = chain.signaturesForAddress(recipient, SIGNATURE_SCAN_LIMIT)
-        if (candidates != null) {
-            for (signature in candidates) {
-                if (settlement.verify(signature) != SettlementVerifier.Verdict.VERIFIED) continue
-                val details = chain.fetchTransferDetails(signature) ?: continue
-                val hit = details.any {
-                    it.fromOwner == buyer &&
-                        it.toOwner == recipient &&
-                        it.mint == mint &&
-                        it.amountBaseUnits == amount
+            ?: return Result.StillOpen
+        var scanConclusive = true
+        for (signature in candidates) {
+            val verdict = settlement.verify(signature)
+            when {
+                verdict == SettlementVerifier.Verdict.VERIFIED -> {
+                    val details = chain.fetchTransferDetails(signature)
+                    if (details == null) {
+                        // A live candidate we cannot read: the
+                        // match question is unanswered, so the
+                        // whole scan is inconclusive.
+                        scanConclusive = false
+                        continue
+                    }
+                    val hit = details.any {
+                        it.fromOwner == buyer &&
+                            it.toOwner == recipient &&
+                            it.mint == mint &&
+                            it.amountBaseUnits == amount
+                    }
+                    if (hit) return Result.Matched(signature)
                 }
-                if (hit) return Result.Matched(signature)
+                // A definitive refusal is a final answer for this
+                // candidate: conclusively not this payment.
+                verdict.isDefinitiveRefusal() -> Unit
+                // NOT_FOUND (propagation lag), RPC_UNREACHABLE,
+                // RAIL_UNCONFIGURED: no answer at all — the scan
+                // is inconclusive and expiry must not fire.
+                else -> scanConclusive = false
             }
         }
+        if (!scanConclusive) return Result.StillOpen
         val height = chain.currentBlockHeight()
         val lastValid = outcome.lastValidBlockHeight
         if (height != null && lastValid != null && height > lastValid) {

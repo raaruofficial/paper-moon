@@ -1,5 +1,7 @@
 package com.hindsight.app.wallet
 
+import kotlinx.coroutines.CancellationException
+
 /**
  * The disconnect contract's sequence (Gate 0 C-09 / UMBRA S-10),
  * extracted as a pure orchestration so the money harness can prove
@@ -29,9 +31,24 @@ object DisconnectSequence {
         forgetLocally: suspend () -> Unit,
         unbind: () -> Unit
     ): Boolean {
-        val revoked = runCatching { attemptDeauthorize() }.getOrDefault(false)
+        var cancellation: CancellationException? = null
+        val revoked = try {
+            attemptDeauthorize()
+        } catch (e: CancellationException) {
+            // Cancellation is not a revoke failure (TEKKADAN
+            // audit A-F4): the forget + unbind below still run —
+            // they are the contract's unconditional safety leg —
+            // but the cancellation itself is honoured and
+            // rethrown once they complete, never swallowed into
+            // a normal "not revoked" result.
+            cancellation = e
+            false
+        } catch (e: Exception) {
+            false
+        }
         forgetLocally()
         unbind()
+        cancellation?.let { throw it }
         return revoked
     }
 }

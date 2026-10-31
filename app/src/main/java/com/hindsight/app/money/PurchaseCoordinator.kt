@@ -1,5 +1,7 @@
 package com.hindsight.app.money
 
+import kotlinx.coroutines.CancellationException
+
 /**
  * The five fields of the native purchase sheet (AC-04 item 2). Every
  * field is populated from shell-side values — the single price source
@@ -245,7 +247,42 @@ class PurchaseCoordinator(
             flow.recordOutcome(outcome)
             return PurchaseResult.Failed(TxErrorClass.RPC_OR_CONFIRMATION_FAILURE)
         }
-        return when (val sent = walletSender.sendTransaction(serialized)) {
+        // C-21 process-death context (TEKKADAN audit F2): stamp
+        // the BUILT transaction's blockhash + lastValidBlockHeight
+        // onto the AWAITING_WALLET record BEFORE the sender runs,
+        // so an intent stranded by process death during the send
+        // (the app is backgrounded behind the wallet — exactly
+        // when Android may kill it) carries everything launch
+        // reconciliation needs to convert and resolve it.
+        (blockhashProvider as? BuildContextSource)?.lastBuildContext()?.let { buildCtx ->
+            flow.recordOutcome(
+                PurchaseOutcome(
+                    key, PurchaseState.AWAITING_WALLET, null, null, "Awaiting wallet.", buyerIdentity,
+                    blockhash = buildCtx.blockhashBase58,
+                    lastValidBlockHeight = buildCtx.lastValidBlockHeight,
+                    createdAtMs = System.currentTimeMillis()
+                )
+            )
+        }
+        // The send seam must never escape without an outcome
+        // (TEKKADAN audit F2): an exception out of the sender —
+        // above all a CancellationException, which is what a
+        // wallet session dying with its host activity surfaces
+        // as — previously stranded the intent at AWAITING_WALLET
+        // with NO outcome recorded: wedged in-process, and after
+        // relaunch covered by no guard at all. A send that ends
+        // without a signature and without a certain failure is
+        // the ambiguous class by definition, so any escape is
+        // mapped into it and recorded like any other ambiguous
+        // ending.
+        val sent = try {
+            walletSender.sendTransaction(serialized)
+        } catch (e: CancellationException) {
+            SendOutcome.UnresolvedNoSignature(KIND_CANCELLED)
+        } catch (e: Exception) {
+            SendOutcome.UnresolvedNoSignature(KIND_WALLET_ERROR)
+        }
+        return when (sent) {
             is SendOutcome.Failed -> {
                 val errorClass = TxErrorMapper.map(sent.kind)
                 flow.recordOutcome(
@@ -277,6 +314,10 @@ class PurchaseCoordinator(
                     walletErrorKind = sent.mappedKindName,
                     createdAtMs = System.currentTimeMillis()
                 )
+                // If this write fails, recordOutcome holds the
+                // in-flight slot (audit F4): the buyer stays
+                // blocked in-process, and the unresolved result
+                // below remains the honest surface either way.
                 flow.recordOutcome(outcome)
                 PurchaseResult.UnresolvedNoSignature(outcome)
             }
@@ -332,14 +373,19 @@ class PurchaseCoordinator(
                 settle(outcome.idempotencyKey, result.signature, MoneyConfig.ITEM_DAY_PASS, buyer)
             }
             NoSignatureReconciler.Result.ExpiredUnmatched -> {
-                flow.recordOutcome(
+                // The close is a durable fact or it did not happen
+                // (TEKKADAN audit F4): if the FAILED write failed,
+                // the buyer is NOT freed — the still-open outcome
+                // keeps blocking instead of falling through to a
+                // fresh purchase on an unrecorded close.
+                val closed = flow.recordOutcome(
                     outcome.copy(
                         state = PurchaseState.FAILED,
                         errorClass = TxErrorClass.RPC_OR_CONFIRMATION_FAILURE,
                         message = NOT_SUBMITTED_MESSAGE
                     )
                 )
-                null
+                if (closed) null else PurchaseResult.UnresolvedNoSignature(outcome)
             }
             NoSignatureReconciler.Result.StillOpen ->
                 PurchaseResult.UnresolvedNoSignature(outcome)
@@ -432,6 +478,30 @@ class PurchaseCoordinator(
             if (buyer.isEmpty()) continue // unattributable: stays ACTIVE and visible in the journal
             settle(key, signature, item, buyer)
         }
+        // C-21 process-death conversion (TEKKADAN audit F2): the
+        // flow pass above rewrote stranded AWAITING_WALLET intents
+        // UNKNOWN — no signature, so no signature guard covers
+        // them and a fresh purchase could double-charge against a
+        // payment that may have landed. Convert each into the
+        // no-signature machinery: stamp the config-side intent
+        // fields the pre-C-21 record lacks (amount/mint from
+        // MoneyConfig, recipient from the shell provider; the
+        // build context was stamped pre-send where the process
+        // lived long enough) so the guard covers it and the
+        // no-signature pass below owns its resolution — a match
+        // settles it, recorded LVBH + height can still prove
+        // non-submission, anything else stays open.
+        flow.strandedNoSignatureOutcomes().forEach { stranded ->
+            flow.recordOutcome(
+                stranded.copy(
+                    state = PurchaseState.UNRESOLVED_NO_SIGNATURE,
+                    message = UNRESOLVED_USER_MESSAGE,
+                    amountBaseUnits = stranded.amountBaseUnits ?: MoneyConfig.PRICE_USDC_BASE_UNITS,
+                    mint = stranded.mint ?: MoneyConfig.USDC_MINT,
+                    recipient = stranded.recipient ?: receivingWalletProvider()
+                )
+            )
+        }
         // C-21: open no-signature outcomes reconcile in the same
         // launch pass — a match grants through settle(), proven
         // non-submission closes the intent, anything else stays
@@ -443,6 +513,12 @@ class PurchaseCoordinator(
     }
 
     companion object {
+        /** Sealed kind names (the C-14 mapping table's vocabulary)
+         *  for ambiguous send endings that arrive as exceptions
+         *  rather than as SDK error codes (TEKKADAN audit F2). */
+        const val KIND_CANCELLED: String = "CANCELLED"
+        const val KIND_WALLET_ERROR: String = "WALLET_ERROR"
+
         /** Non-delivery reason recorded for a purchase refused
          *  against an already-active pass (Terms §7(b)). */
         const val NON_DELIVERY_DUPLICATE_ACTIVE_PASS: String = "duplicate_active_pass"
