@@ -41,7 +41,7 @@ fun jdkSign(kp: java.security.KeyPair, msg: ByteArray): ByteArray {
 }
 
 val TEST_RECIPIENT: String = Base58.encode(ByteArray(32) { (it + 7).toByte() })
-const val RAARU_SKR_TREASURY = "FRShnxX7vi64gtBoA6JPmH9MBuVqtheEQaxA1D17wKdP" // raaru.skr — owner-ruled PM recipient since 2026-10-21
+const val RELAY_RECEIVING_WALLET = "BiuPWZ4kiwJjyptxS5Uetr89wTb19TMdWnA4JyZEr1fK" // estate Relay — owner-ruled PM recipient since 2026-10-31 (Relay flip; supersedes direct-to-raaru.skr)
 
 class FakeChain(var tx: ObservedTransaction?) : ChainReader {
     override fun fetchTransaction(signature: String): ObservedTransaction? = tx
@@ -70,16 +70,16 @@ class PutFailStore(val inner: InMemorySecureStore = InMemorySecureStore()) : Sec
 }
 
 fun main() {
-    println("== GATE: owner-ruled receiving wallet (raaru.skr) + fail-closed mechanics ==")
-    // Owner ruling 2026-10-21 (supersedes the TRACE pre-join dedicated-wallet
-    // state): day-pass payments receive directly at raaru.skr, the shared
-    // treasury, and sales are ENABLED. The production rail is therefore OPEN
-    // at this head. Fail-closed mechanics are proven below against INJECTED
-    // unconfigured/closed providers -- the state any build without a
-    // configured wallet must refuse in.
-    check("GATE configured wallet is the owner-ruled recipient (raaru.skr)",
-        ReceivingWalletConfig.configuredReceivingWallet == "FRShnxX7vi64gtBoA6JPmH9MBuVqtheEQaxA1D17wKdP")
-    check("GATE configured wallet equals the raaru.skr treasury by owner ruling", ReceivingWalletConfig.configuredReceivingWallet == RAARU_SKR_TREASURY)
+    println("== GATE: owner-ruled receiving wallet (estate Relay) + fail-closed mechanics ==")
+    // Owner ruling 2026-10-31 (supersedes the 2026-10-21 direct-to-raaru.skr
+    // ruling): day-pass payments receive at the estate Relay wallet, the
+    // estate's consolidation destination, and sales are ENABLED. The
+    // production rail is therefore OPEN at this head. Fail-closed mechanics
+    // are proven below against INJECTED unconfigured/closed providers -- the
+    // state any build without a configured wallet must refuse in.
+    check("GATE configured wallet is the owner-ruled recipient (estate Relay)",
+        ReceivingWalletConfig.configuredReceivingWallet == "BiuPWZ4kiwJjyptxS5Uetr89wTb19TMdWnA4JyZEr1fK")
+    check("GATE configured wallet equals the estate Relay by owner ruling", ReceivingWalletConfig.configuredReceivingWallet == RELAY_RECEIVING_WALLET)
     check("GATE configured opens the rail (sales enabled by owner ruling)",
         ReceivingWalletConfig.railOpen)
     run {
@@ -195,7 +195,7 @@ fun main() {
             check("AC-03 tx carries TransferChecked for exactly the single-source price", contains(tx, needle))
             val recipientAta = TransactionBuilder.associatedTokenAddress(Base58.decode(TEST_RECIPIENT), Base58.decode(MoneyConfig.USDC_MINT))!!
             check("AC-03 tx includes recipient ATA (derived from configured wallet)", contains(tx, recipientAta))
-            check("AC-03 tx built for injected recipient never names raaru.skr", !contains(tx, Base58.decode(RAARU_SKR_TREASURY)))
+            check("AC-03 tx built for injected recipient never names the Relay wallet", !contains(tx, Base58.decode(RELAY_RECEIVING_WALLET)))
         }
     }
 

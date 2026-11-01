@@ -2,6 +2,38 @@
 
 > **Registry binding (2026-10-29, ARCHIVIST §3):** this file is bound to the estate fault registry `~/workspace/dapp-store-work/KNOWN_FAULT_CLASSES.md` — **Registry v1.0** (launched 2026-10-29), cited by version stamp in every seal. Rows for this shell's ingredients are tracked there under the same IDs — a PATCH_NOTES row and a registry row are never two descriptions of one fault: **KFC-001** sender class (device-proved on this title 2026-10-27; cured v0.2.5; shipped v0.2.8 verified CURED on the binary) · **KFC-002** boundary takeover (PM not yet assessed) · **KFC-003** unguarded WebView (residue OPEN — GameScreen patch rides v0.2.9) · **KFC-004** locked account-level field (FILED + STAFF-CONFIRMED, read-back pending).
 
+## 2026-10-31 — v0.2.11: Relay receiving flip (branched from sealed v0.2.10)
+
+Branch `release/v0.2.11` from tag `v0.2.10` (commit 36990cc). Sealed
+v0.2.9 / v0.2.10 are untouched — their seals stand as history.
+
+- **Owner ruling (2026-10-31, OMEGA chat):** Paper Moon's payment
+  receiving flips from direct-to-raaru.skr to the estate Relay wallet
+  `BiuPWZ4kiwJjyptxS5Uetr89wTb19TMdWnA4JyZEr1fK` (the estate's
+  consolidation destination; Relay → raaru.skr forwarding is off-app).
+- **Change set (receiving only):** `CONFIGURED_RECEIVING_WALLET` in
+  `MoneyConfig.kt` — the single config source read by
+  TransactionBuilder, SettlementVerifier, SolanaRpc,
+  PurchaseCoordinator and the bridge, so the verifier now expects the
+  Relay address by construction. Price ($3.50 USDC), mint, Connect
+  machinery, content and the game bundle are byte-untouched.
+- **Re-pins:** harness GATE constants/checks now pin the Relay address;
+  `census.sh` receiving-wallet census re-pinned to the Relay (exactly 1,
+  MoneyConfig.kt only) plus a new must-be-0 census for the superseded
+  raaru.skr direct-recipient address in app source. This deliberately
+  breaks the v0.2.10 C-22 money freeze on exactly one value — the
+  recipient — by owner ruling; every other frozen money file
+  (TransactionBuilder.kt, SettlementVerifier.kt) is byte-identical.
+- **Battery (source level):** money harness 183 checks, 0 failures;
+  `census.sh` all clean. Local type-check deps (/tmp/deps) absent on
+  this machine — CI build-debug/build-release is the compile authority
+  (the same posture as the v0.2.10 seal).
+- **Consequence of record:** direct-to-raaru receiving is superseded
+  in this candidate; the PM till (41FFd2wK…) is bypassed as payment
+  landing in this shape (it receives nothing in-app).
+- **Submission state: NOT SUBMITTED.** Staged after v0.2.10 in the
+  submission package; submission still requires the owner's fire word.
+
 ## 2026-10-30 — v0.2.10: the Seeker Connect build (Gate 0 step 4) — IN PROGRESS
 
 Branch `feature/v0210-seeker-connect` from the v0.2.8 source pin

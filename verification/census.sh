@@ -47,11 +47,15 @@ n=$(grep -v -E '^var (SCENARIOS|CATALYSTS|STORIES|NARRATIVES|RIDE_EXPECTATIONS)=
 echo "census bundle price literals other than sanctioned \$3.50 (AC-09 re-pinned 2026-10-27: must be 0; data blocks excluded \u2014 historical prices are content, not offers) = $n"
 if [ "$n" -ne 0 ]; then fail=1; grep -v -E '^var (SCENARIOS|CATALYSTS|STORIES|NARRATIVES|RIDE_EXPECTATIONS)=' "$MAIN/assets/game/index.html" | grep -o '\$[0-9][0-9,]*\.[0-9][0-9]' | grep -v '^\$3\.50$' | head -5; fi
 # Re-pinned (see header): owner-ruled receiving wallet, exactly once,
-# only as the MoneyConfig.kt constant.
-n=$(grep -rn -- "FRShnxX7vi64gtBoA6JPmH9MBuVqtheEQaxA1D17wKdP" "$MAIN/java/com/hindsight/app/money" 2>/dev/null | wc -l)
-loc=$(grep -rln -- "FRShnxX7vi64gtBoA6JPmH9MBuVqtheEQaxA1D17wKdP" "$MAIN/java/com/hindsight/app/money" 2>/dev/null)
-echo "census receiving-wallet (treasury) address in money code (owner-ruled 2026-10-21: exactly 1, MoneyConfig.kt only) = $n"
-if [ "$n" -ne 1 ] || [ "$loc" != "$MAIN/java/com/hindsight/app/money/MoneyConfig.kt" ]; then fail=1; grep -rn -- "FRShnxX7vi64gtBoA6JPmH9MBuVqtheEQaxA1D17wKdP" "$MAIN/java/com/hindsight/app/money" | head -5; fi
+# only as the MoneyConfig.kt constant. RE-PINNED AGAIN 2026-10-31
+# (v0.2.11): the receiving wallet is now the estate Relay (owner Relay
+# ruling 2026-10-31), superseding the 2026-10-21 direct-to-raaru pin.
+n=$(grep -rn -- "BiuPWZ4kiwJjyptxS5Uetr89wTb19TMdWnA4JyZEr1fK" "$MAIN/java/com/hindsight/app/money" 2>/dev/null | wc -l)
+loc=$(grep -rln -- "BiuPWZ4kiwJjyptxS5Uetr89wTb19TMdWnA4JyZEr1fK" "$MAIN/java/com/hindsight/app/money" 2>/dev/null)
+echo "census receiving-wallet (Relay) address in money code (owner-ruled 2026-10-31: exactly 1, MoneyConfig.kt only) = $n"
+if [ "$n" -ne 1 ] || [ "$loc" != "$MAIN/java/com/hindsight/app/money/MoneyConfig.kt" ]; then fail=1; grep -rn -- "BiuPWZ4kiwJjyptxS5Uetr89wTb19TMdWnA4JyZEr1fK" "$MAIN/java/com/hindsight/app/money" | head -5; fi
+# Superseded recipient must not survive anywhere in app source (v0.2.11).
+count "superseded raaru.skr direct-recipient address in app source (v0.2.11: must be 0)" "FRShnxX7vi64gtBoA6JPmH9MBuVqtheEQaxA1D17wKdP" "$MAIN/java"
 # Positive checks (must be >= 1)
 pos() {
     name="$1"; pattern="$2"; shift 2

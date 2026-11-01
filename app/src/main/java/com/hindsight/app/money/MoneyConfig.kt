@@ -78,14 +78,19 @@ object MoneyConfig {
  */
 object ReceivingWalletConfig {
     /**
-     * The dedicated PAPER MOON receiving wallet, Base58.
+     * The configured PAPER MOON receiving wallet, Base58.
      * Set 2026-10-20 by decision (see class doc) as a dedicated wallet;
      * SUPERSEDED 2026-10-21 by the owner's direct ruling: day-pass
      * payments receive at raaru.skr (the shared treasury above),
      * chosen before any sale or submission, inside the pre-join
-     * window. The harness pins are being re-pinned to this fact.
+     * window. SUPERSEDED AGAIN 2026-10-31 by the owner's Relay
+     * ruling: day-pass payments receive at the estate Relay wallet,
+     * the estate's consolidation destination (Relay -> raaru.skr
+     * forwarding is handled off-app). Direct-to-raaru receiving
+     * stands superseded; the PM till receives nothing in-app in
+     * this shape. The harness pins are re-pinned to this fact.
      */
-    private const val CONFIGURED_RECEIVING_WALLET: String = "FRShnxX7vi64gtBoA6JPmH9MBuVqtheEQaxA1D17wKdP"
+    private const val CONFIGURED_RECEIVING_WALLET: String = "BiuPWZ4kiwJjyptxS5Uetr89wTb19TMdWnA4JyZEr1fK"
 
     /** The configured receiving wallet, or null when unconfigured. */
     val configuredReceivingWallet: String?
