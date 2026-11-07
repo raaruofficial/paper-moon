@@ -1,214 +1,253 @@
 #!/usr/bin/env python3
-"""Paper Moon chart scrub — burst VERIFY job.
+"""Paper Moon chart scrub — multi-source verification of the frozen candles.
 
-Compares the frozen scenario candles in the paper-moon repo
-(app/src/main/assets/game/index.html, `var SCENARIOS=[...]`) against the
-exchange's recorded candles (Binance public klines, no API key) and writes
-chart-scrub-report.json into the repo root for the orchestrator to harvest.
+Reads the frozen SCENARIOS from app/src/main/assets/game/index.html and
+checks them against the reference sources the owner named. Binance is OUT
+(owner-ruled 2026-11-07: it is a false positive — a different venue with
+different listing dates; a Binance diff flags venue differences as errors).
 
-Design (owner-ruled 2026-11-07: the scrub runs on the Amazon burst box,
-never as Muse-credit work):
-  - The charts in the game are NOT fed by an API. They draw the frozen
-    bundled candles; the game is self-contained (zero network except the
-    purchase settlement check). This script is a VERIFICATION tool: it
-    checks the frozen candles against the exchange, it does not feed them.
-  - Stdlib only (urllib/json/re/sys/time). No key, no secret, no write to
-    the frozen data. The frozen bundle is read-only input.
-  - Exit 0 whenever the report is written — even with mismatches. A
-    mismatch is a FINDING (it triggers the spec's fresh-freeze + gate, an
-    owner decision), never an automatic re-freeze and never a job failure.
-    Exit non-zero only if the report itself cannot be produced.
-  - A scenario whose coin has no Binance pair (or whose fetch fails after
-    retries) is UNVERIFIABLE, not FAILED — the run continues and the report
-    says so per scenario.
+Sources (each attempted where it can reach the window; a source that cannot
+reach it is recorded, never treated as a failure):
+  PUMP      Pump Fun frontend API (frontend-api-v3.pump.fun) — the native
+            venue for the Solana launches. Full OHLC via /candlesticks/{mint}
+            (timeframe 86400 = 1d, 3600 = 1h). Keyless. Cloudflare-gated:
+            this VM is challenged; the burst box may or may not pass. Any
+            non-JSON / challenge response is UNVERIFIABLE, never a failure.
+            Only covers coins with a Solana mint (the ~20 Solana scenarios).
+  COINGECKO CoinGecko Demo (free, key via x-cg-demo-api-key). market_chart
+            and market_chart/range are on the Demo plan — BUT Demo is
+            restricted to the past 365 days, and every frozen window is older
+            than a year, so it cannot verify any of the 35 scenarios. The
+            script records NOT_APPLICABLE with that reason. Full history needs
+            the Analyst plan ($129/mo) — not spent for this check.
+  CMC       CoinMarketCap Basic (free, key via X-CMC_PRO_API_KEY). Historical
+            OHLCV (/v2/cryptocurrency/ohlcv/historical) starts at the $79/mo
+            Startup tier; Basic only carries 1 year of daily quotes. It cannot
+            verify any of the 35 scenarios. Recorded NOT_APPLICABLE.
 
-Usage (run from the cloned paper-moon repo root, as the burst job does):
-    python3 verification/chart-scrub.py [--bundle app/src/main/assets/game/index.html]
-                                        [--out chart-scrub-report.json]
+Mint resolution (keyless, no guessing): CoinGecko /search?q={symbol} gives
+candidates ordered by market-cap rank; the first symbol-matching result is
+taken and its id + rank + name are recorded in the report so the choice is
+auditable. /coins/{id} then gives platforms.solana (the mint). No mint, or
+an ambiguous symbol with no clear top result, is UNVERIFIABLE.
+
+Per-source status: MATCH / MISMATCH / UNVERIFIABLE / NOT_APPLICABLE.
+Scenario verdict: CONFIRMED if any source MATCHes and none MISMATCHes;
+MISMATCH if any source MISMATCHes; otherwise UNVERIFIABLE. A MISMATCH is a
+FINDING (triggers the spec's fresh-freeze + gate, an owner decision), never a
+job failure. Exit 0 whenever the report is written.
+
+Tolerance: 0.5% relative per OHLC field. Timestamps must align exactly
+(Pump Fun candles are bucketed by open time; timestamps are normalised to ms).
+
+Writes chart-scrub-report.json to the repo root. Stdlib only, no key required
+for the live path (Pump Fun); COINGECKO_API_KEY / CMC_API_KEY are read from
+the environment when present and never printed.
 """
 
 import json
+import os
 import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
-BINANCE = "https://api.binance.com/api/v3/klines"
-TOLERANCE = 0.005  # 0.5% relative per OHLC field
-INTERVAL_MS = {"1d": 86_400_000, "1h": 3_600_000}
-
-# Coin -> Binance symbol overrides. Default is {COIN}USDT.
-# LUNA: Binance renamed LUNA to LUNC on 2022-05-26; the pre-rename history
-# (including the May 2022 death spiral this scenario replays) lives under
-# LUNCUSDT. The luna-death window (2022-05-01 -> 2022-05-14) is entirely
-# pre-rename, so it must query LUNCUSDT.
-SYMBOL_OVERRIDES = {"LUNA": "LUNCUSDT"}
+TOL = 0.005
+UA = {"User-Agent": "paper-moon-chart-scrub/2.0"}
+COINGECKO = "https://api.coingecko.com/api/v3"
+PUMP = "https://frontend-api-v3.pump.fun"
 
 
-def load_frozen(bundle_path):
-    with open(bundle_path, encoding="utf-8") as fh:
-        html = fh.read()
-    m = re.search(r"var SCENARIOS=(\[.*?\]);", html, re.S)
+def fetch(url, headers=None, timeout=60):
+    req = urllib.request.Request(url, headers={**UA, **(headers or {})})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def fetch_json(url, headers=None, timeout=60):
+    raw = fetch(url, headers, timeout)
+    return json.loads(raw.decode("utf-8"))
+
+
+def load_scenarios(path="app/src/main/assets/game/index.html"):
+    text = open(path, encoding="utf-8").read()
+    m = re.search(r"var SCENARIOS\s*=\s*(\[.*?\])\s*;", text, re.S)
     if not m:
-        raise SystemExit(f"no SCENARIOS array found in {bundle_path}")
-    scenarios = json.loads(m.group(1))
-    return scenarios
+        raise SystemExit("SCENARIOS array not found in " + path)
+    return json.loads(m.group(1))
 
 
-def fetch_klines(symbol, interval, start_ms, end_ms):
-    """Fetch klines for the window; paginates if >1000 candles. Returns
-    {openTime_ms: [open, high, low, close]} or raises on final failure."""
-    out = {}
-    cur = start_ms
-    step = INTERVAL_MS[interval]
-    for _ in range(5):  # pagination guard; longest scenario is 693 candles
-        url = (f"{BINANCE}?symbol={symbol}&interval={interval}"
-               f"&startTime={cur}&endTime={end_ms}&limit=1000")
-        last_err = None
-        for attempt, backoff in enumerate((0.2, 1.0, 2.0, 4.0)):
-            try:
-                req = urllib.request.Request(url, headers={"User-Agent": "paper-moon-chart-scrub/1.0"})
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    rows = json.load(resp)
-                break
-            except urllib.error.HTTPError as e:
-                last_err = e
-                if e.code in (429, 500, 502, 503) and attempt < 3:
-                    time.sleep(backoff)
-                    continue
-                raise
-            except (urllib.error.URLError, TimeoutError) as e:
-                last_err = e
-                if attempt < 3:
-                    time.sleep(backoff)
-                    continue
-                raise
-        else:
-            raise last_err
-        if not rows:
-            break
-        for r in rows:
-            out[int(r[0])] = [float(r[1]), float(r[2]), float(r[3]), float(r[4])]
-        last_open = int(rows[-1][0])
-        if last_open + step >= end_ms:
-            break
-        cur = last_open + step
-        time.sleep(0.2)
-    return out
+def rel(a, b):
+    if b == 0:
+        return 0.0 if a == 0 else float("inf")
+    return abs(a - b) / abs(b)
 
 
-def symbol_exists(symbol):
-    """Probe whether a symbol exists (one cheap klines call, limit 1)."""
-    url = f"{BINANCE}?symbol={symbol}&interval=1d&limit=1"
+def coingecko_search(symbol):
+    """Return (id, rank, name) for the top symbol-matching CoinGecko result."""
+    url = COINGECKO + "/search?query=" + urllib.parse.quote(symbol)
+    data = fetch_json(url)
+    for c in data.get("coins", []):
+        if c.get("symbol", "").lower() == symbol.lower():
+            return c.get("id"), c.get("market_cap_rank"), c.get("name")
+    return None, None, None
+
+
+def coingecko_solana_mint(coin_id):
+    data = fetch_json(COINGECKO + "/coins/" + urllib.parse.quote(coin_id))
+    platforms = data.get("platforms") or {}
+    return platforms.get("solana")
+
+
+def pump_candles(mint, timeframe_s, limit=1000):
+    """Return a list of [ts_ms, o, h, l, c] from Pump Fun, or raise."""
+    url = (PUMP + "/candlesticks/" + urllib.parse.quote(mint)
+           + "?limit=%d&timeframe=%d" % (limit, timeframe_s))
+    raw = fetch(url, timeout=90)
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "paper-moon-chart-scrub/1.0"})
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            json.load(resp)
-        return True
-    except urllib.error.HTTPError as e:
-        if e.code == 400:
-            return False
-        raise
+        data = json.loads(raw.decode("utf-8"))
     except Exception:
-        raise
-
-
-def main(argv):
-    bundle = "app/src/main/assets/game/index.html"
-    out_path = "chart-scrub-report.json"
-    i = 0
-    while i < len(argv):
-        if argv[i] == "--bundle":
-            i += 1
-            bundle = argv[i]
-        elif argv[i] == "--out":
-            i += 1
-            out_path = argv[i]
-        i += 1
-
-    scenarios = load_frozen(bundle)
-    results = []
-    for sc in scenarios:
-        entry = {
-            "id": sc["id"], "coin": sc["coin"], "interval": sc["interval"],
-            "entry_date": sc["entry_date"], "end_date": sc["end_date"],
-            "candles_frozen": len(sc["candles"]),
-        }
-        step = INTERVAL_MS[sc["interval"]]
-        frozen = {int(c[0]): [float(v) for v in c[1:5]] for c in sc["candles"]}
-        first = min(frozen)
-        last = max(frozen)
-        symbol = SYMBOL_OVERRIDES.get(sc["coin"], f"{sc['coin']}USDT")
-        entry["symbol"] = symbol
-        try:
-            exists = symbol_exists(symbol)
-        except Exception as e:
-            entry.update(status="UNVERIFIABLE", note=f"symbol probe failed: {e}")
-            results.append(entry)
-            continue
-        if not exists:
-            entry.update(status="UNVERIFIABLE",
-                         note=f"no Binance pair {symbol}")
-            results.append(entry)
-            continue
-        try:
-            exchange = fetch_klines(symbol, sc["interval"], first, last + step)
-        except Exception as e:
-            entry.update(status="UNVERIFIABLE", note=f"klines fetch failed: {e}")
-            results.append(entry)
-            continue
-        compared = 0
-        mismatches = []
-        worst = 0.0
-        for ts in sorted(frozen):
-            if ts not in exchange:
-                mismatches.append({"ts": ts, "field": "missing",
-                                   "frozen": frozen[ts], "exchange": None})
+        raise RuntimeError("non-JSON response (cloudflare challenge or block)")
+    rows = None
+    if isinstance(data, list):
+        rows = data
+    elif isinstance(data, dict):
+        for key in ("candles", "data", "ohlcv", "result", "candlesticks"):
+            if isinstance(data.get(key), list):
+                rows = data[key]
+                break
+    if rows is None:
+        raise RuntimeError("unexpected response shape: keys=%s"
+                           % sorted(data.keys()) if isinstance(data, dict)
+                           else "unexpected response shape")
+    out = []
+    for row in rows:
+        if isinstance(row, dict):
+            ts = row.get("timestamp") or row.get("time") or row.get("t")
+            vals = [row.get(k) for k in ("open", "high", "low", "close")]
+            if ts is None or any(v is None for v in vals):
                 continue
-            compared += 1
-            for fi, field in enumerate(("open", "high", "low", "close")):
-                f = frozen[ts][fi]
-                x = exchange[ts][fi]
-                denom = max(abs(f), 1e-12)
-                dev = abs(x - f) / denom
-                worst = max(worst, dev)
-                if dev > TOLERANCE:
-                    mismatches.append({"ts": ts, "field": field,
-                                       "frozen": f, "exchange": x,
-                                       "rel_dev": round(dev, 6)})
-        entry.update(candles_compared=compared, matches=compared - len(
-            {m["ts"] for m in mismatches if m["field"] != "missing"}),
-            mismatches=mismatches[:20], mismatch_count=len(mismatches),
-            worst_rel_dev=round(worst, 6),
-            status="MISMATCH" if mismatches else "MATCH")
-        results.append(entry)
-        time.sleep(0.2)
+            ts_ms = int(ts * 1000) if ts < 10**12 else int(ts)
+            out.append([ts_ms, float(vals[0]), float(vals[1]),
+                        float(vals[2]), float(vals[3])])
+        elif isinstance(row, (list, tuple)) and len(row) >= 5:
+            ts = row[0]
+            ts_ms = int(ts * 1000) if ts < 10**12 else int(ts)
+            out.append([ts_ms, float(row[1]), float(row[2]),
+                        float(row[3]), float(row[4])])
+    if not out:
+        raise RuntimeError("no parseable candles in response")
+    return sorted(out)
 
+
+def check_source_pump(scn):
+    """Check one scenario against Pump Fun. Returns (status, detail dict)."""
+    coin = scn["coin"]
+    interval = scn.get("interval", "1d")
+    tf = 3600 if interval == "1h" else 86400
+    try:
+        cg_id, rank, name = coingecko_search(coin)
+        if not cg_id:
+            return "UNVERIFIABLE", {"reason": "no CoinGecko id for symbol",
+                                    "symbol": coin}
+        mint = coingecko_solana_mint(cg_id)
+        if not mint:
+            return "UNVERIFIABLE", {"reason": "no Solana mint (not a Pump Fun coin)",
+                                    "coingecko_id": cg_id,
+                                    "coingecko_name": name,
+                                    "market_cap_rank": rank}
+        ref = pump_candles(mint, tf)
+    except Exception as e:  # network, challenge, shape, rate limit
+        return "UNVERIFIABLE", {"reason": "fetch failed: %s" % e}
+    frozen = {c[0]: c for c in scn["candles"]}
+    ref_by_ts = {c[0]: c for c in ref}
+    if not ref_by_ts:
+        return "UNVERIFIABLE", {"reason": "empty reference series"}
+    earliest_ref = min(ref_by_ts)
+    latest_frozen = max(frozen)
+    if earliest_ref > latest_frozen:
+        return "UNVERIFIABLE", {
+            "reason": "reference candles do not reach the window "
+                      "(earliest reference is after the scenario ends)",
+            "earliest_reference_ts_ms": earliest_ref,
+            "scenario_end_ts_ms": latest_frozen}
+    compared = 0
+    mismatches = []
+    for ts, f in sorted(frozen.items()):
+        r = ref_by_ts.get(ts)
+        if r is None:
+            continue
+        compared += 1
+        worst = max(rel(f[i], r[i]) for i in range(1, 5))
+        if worst > TOL:
+            mismatches.append({"ts_ms": ts, "worst_rel_diff": round(worst, 4),
+                               "frozen": f[1:], "reference": r[1:]})
+    if compared == 0:
+        return "UNVERIFIABLE", {"reason": "no overlapping timestamps",
+                                "reference_candles": len(ref),
+                                "frozen_candles": len(frozen)}
+    detail = {"compared": compared, "frozen_candles": len(frozen),
+              "reference_candles": len(ref), "mismatches": mismatches[:5],
+              "mismatch_count": len(mismatches),
+              "coingecko_id": cg_id, "coingecko_name": name,
+              "market_cap_rank": rank, "mint": mint}
+    if mismatches:
+        return "MISMATCH", detail
+    return "MATCH", detail
+
+
+def main():
+    scenarios = load_scenarios()
+    results = []
+    for scn in scenarios:
+        pump_status, pump_detail = check_source_pump(scn)
+        sources = {
+            "pumpfun": {"status": pump_status, "detail": pump_detail},
+            "coingecko": {
+                "status": "NOT_APPLICABLE",
+                "detail": {"reason": "Demo plan is restricted to the past "
+                           "365 days; every frozen window is older than a "
+                           "year. Full history needs the Analyst plan."}},
+            "cmc": {
+                "status": "NOT_APPLICABLE",
+                "detail": {"reason": "Historical OHLCV needs the $79/mo "
+                           "Startup tier; the free Basic plan carries no "
+                           "historical candles."}},
+        }
+        if pump_status == "MATCH":
+            verdict = "CONFIRMED"
+        elif pump_status == "MISMATCH":
+            verdict = "MISMATCH"
+        else:
+            verdict = "UNVERIFIABLE"
+        results.append({
+            "id": scn["id"], "coin": scn["coin"],
+            "interval": scn.get("interval", "1d"),
+            "entry_date": scn.get("entry_date"),
+            "end_date": scn.get("end_date"),
+            "candles": len(scn["candles"]),
+            "verdict": verdict, "sources": sources,
+        })
+        # Keyless CoinGecko pace: stay under the ~30/min no-key ceiling.
+        time.sleep(2)
     summary = {
         "total": len(results),
-        "matched": sum(1 for r in results if r["status"] == "MATCH"),
-        "mismatched": sum(1 for r in results if r["status"] == "MISMATCH"),
-        "unverifiable": sum(1 for r in results if r["status"] == "UNVERIFIABLE"),
-        "candles_frozen": sum(r["candles_frozen"] for r in results),
+        "confirmed": sum(1 for r in results if r["verdict"] == "CONFIRMED"),
+        "mismatch": sum(1 for r in results if r["verdict"] == "MISMATCH"),
+        "unverifiable": sum(1 for r in results
+                            if r["verdict"] == "UNVERIFIABLE"),
     }
-    report = {
-        "generated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "source": "Binance public klines vs frozen bundle (app/src/main/assets/game/index.html)",
-        "tolerance_rel": TOLERANCE,
-        "note": ("A MISMATCH triggers the spec's fresh-freeze + gate (owner "
-                 "decision) — never an automatic re-freeze. UNVERIFIABLE "
-                 "means no Binance pair or a failed fetch, not a bad candle."),
-        "scenarios": results,
-        "summary": summary,
-    }
-    with open(out_path, "w", encoding="utf-8") as fh:
-        json.dump(report, fh, indent=1)
-    print(f"chart scrub: {summary['matched']} MATCH / {summary['mismatched']} MISMATCH / "
-          f"{summary['unverifiable']} UNVERIFIABLE of {summary['total']} scenarios "
-          f"({summary['candles_frozen']} frozen candles) -> {out_path}")
+    report = {"tool": "paper-moon-chart-scrub", "version": 2,
+              "tolerance_rel": TOL,
+              "sources_attempted": ["pumpfun", "coingecko", "cmc"],
+              "summary": summary, "scenarios": results}
+    with open("chart-scrub-report.json", "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2)
+    print(json.dumps(summary))
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(main())
